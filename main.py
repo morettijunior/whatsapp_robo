@@ -2,9 +2,10 @@ from fastapi import FastAPI, Request
 import requests
 import os
 import logging
+import uvicorn
 from dotenv import load_dotenv
 
-# Configuração do Arquivo de Log na mesma pasta do script/exe
+# Configuração do Arquivo de Log na mesma pasta do executável
 log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.log")
 logging.basicConfig(
     filename=log_path,
@@ -20,6 +21,7 @@ app = FastAPI()
 EVOLUTION_URL = os.getenv("EVOLUTION_URL")
 INSTANCE_NAME = os.getenv("INSTANCE_NAME")
 API_KEY = os.getenv("API_KEY")
+PORT = int(os.getenv("PORT", 5000))
 
 logging.info(f"Iniciando bot. EVOLUTION_URL={EVOLUTION_URL}, INSTANCE={INSTANCE_NAME}")
 
@@ -47,13 +49,15 @@ async def webhook_handler(request: Request):
             logging.info(f"Mensagem recebida de {remote_jid}: {message_body}")
             current_state = user_states.get(remote_jid, "menu_principal")
 
+            # --- ETAPA 1: MENU PRINCIPAL DE TRIAGEM ---
             if current_state == "menu_principal":
                 if message_body == "1":
                     user_states[remote_jid] = "financeiro"
                     enviar_mensagem(
                         remote_jid, 
-                        "Você selecionou o **Financeiro**.\n\n"
-                        "Um atendente humano já foi notificado e logo irá atendê-lo por aqui!"
+                        "Você selecionou o *Financeiro*.\n\n"
+                        "Um atendente humano já foi notificado e logo irá atendê-lo por aqui!\n\n"
+                        "💡 *Dica:* Se precisar retornar ao menu principal a qualquer momento, digite *0* ou *menu*."
                     )
                 elif message_body == "2":
                     user_states[remote_jid] = "vendas"
@@ -61,7 +65,8 @@ async def webhook_handler(request: Request):
                     enviar_mensagem(
                         remote_jid, 
                         "Você selecionou **Vendas**.\n\n"
-                        f"Para falar diretamente com a nossa equipe de vendas, clique no link abaixo:\n{link_vendas}"
+                        f"Para falar diretamente com a nossa equipe de vendas, clique no link abaixo:\n{link_vendas}\n\n"
+                        "💡 Para voltar ao menu principal, envie *0* ou *menu* aqui."
                     )
                 elif message_body == "3":
                     user_states[remote_jid] = "oficina"
@@ -69,11 +74,12 @@ async def webhook_handler(request: Request):
                     enviar_mensagem(
                         remote_jid, 
                         "Você selecionou a **Oficina**.\n\n"
-                        f"Para falar diretamente com a nossa oficina, clique no link abaixo:\n{link_oficina}"
+                        f"Para falar diretamente com a nossa oficina, clique no link abaixo:\n{link_oficina}\n\n"
+                        "💡 Para voltar ao menu principal, envie *0* ou *menu* aqui."
                     )
                 else:
                     menu = (
-                        "Olá! Seja bem-vindo ao nosso atendimento.\n\n"
+                        "Olá! Seja bem-vindo ao atendimento da *Rondochassis*.\n\n"
                         "Por favor, escolha o setor desejado:\n\n"
                         "1️⃣ - Financeiro\n"
                         "2️⃣ - Vendas\n"
@@ -81,10 +87,19 @@ async def webhook_handler(request: Request):
                         "Responda apenas com o número da opção desejada."
                     )
                     enviar_mensagem(remote_jid, menu)
+
+            # --- ETAPA 2: CLIENTE JÁ DIRECIONADO PARA UM SETOR ---
             else:
                 if message_body.lower() == "menu" or message_body == "0":
                     user_states[remote_jid] = "menu_principal"
-                    enviar_mensagem(remote_jid, "Retornando ao menu principal.\n\nDigite 1, 2 ou 3 para escolher o setor desejado.")
+                    menu_retorno = (
+                        "Retornando ao menu principal da *Rondochassis*.\n\n"
+                        "Por favor, escolha o setor desejado:\n\n"
+                        "1️⃣ - Financeiro\n"
+                        "2️⃣ - Vendas\n"
+                        "3️⃣ - Oficina"
+                    )
+                    enviar_mensagem(remote_jid, menu_retorno)
                 else:
                     logging.info(f"[{current_state.upper()}] Mensagem de {remote_jid}: {message_body}")
                     
@@ -110,3 +125,6 @@ def enviar_mensagem(number: str, text: str):
         return response.json()
     except Exception as e:
         logging.error(f"Erro ao enviar mensagem para a Evolution API: {e}")
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=PORT, reload=False)
