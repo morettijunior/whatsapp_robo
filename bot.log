@@ -1,0 +1,103 @@
+2026-10-27 16:46:08,113 - INFO - Iniciando bot (Módulo Financeiro). EVOLUTION_URL=http://192.168.100.4:8080, INSTANCE=rondochassis_teste
+2026-10-27 16:46:12,769 - INFO - Mensagem recebida de 556634211496@s.whatsapp.net: teste
+2026-10-27 16:46:13,571 - INFO - Resposta da Evolution (Enviar): Status 201 - {"key":{"remoteJid":"556634211496@s.whatsapp.net","fromMe":true,"id":"3EB0FC1A8C0CF91F6E8CFE"},"pushName":"Você","status":"PENDING","message":{"conversation":"Opção inválida. Por favor, escolha o setor desejado:\n\n1️⃣ - Financeiro\n2️⃣ - Vendas\n3️⃣ - Oficina\n\nResponda apenas com o número da opção desejada."},"contextInfo":{"mentionedJid":[],"groupMentions":[],"ephemeralSettingTimestamp":{"low":1792961170,"high":0,"unsigned":false},"disappearingMode":{"initiator":0}},"messageType":"conversation","messageTimestamp":1793133970,"instanceId":"45598221-ddbe-4775-ba2e-f6a1ec902f07","source":"web"}
+2026-10-27 16:46:14,707 - INFO - Mensagem recebida de 556634211496@s.whatsapp.net: Olá! Seja bem-vindo ao nosso atendimento.
+
+Por favor, escolha o setor desejado:
+
+1️⃣ - Financeiro
+2️⃣ - Vendas
+3️⃣ - Oficina
+
+Responda apenas com o número da opção desejada.
+2026-10-27 16:46:15,500 - INFO - Resposta da Evolution (Enviar): Status 201 - {"key":{"remoteJid":"556634211496@s.whatsapp.net","fromMe":true,"id":"3EB0F940F7267EDA8A2815"},"pushName":"Você","status":"PENDING","message":{"conversation":"Opção inválida. Por favor, escolha o setor desejado:\n\n1️⃣ - Financeiro\n2️⃣ - Vendas\n3️⃣ - Oficina\n\nResponda apenas com o número da opção desejada."},"contextInfo":{"mentionedJid":[],"groupMentions":[],"ephemeralSettingTimestamp":{"low":1792961172,"high":0,"unsigned":false},"disappearingMode":{"initiator":0}},"messageType":"conversation","messageTimestamp":1793133972,"instanceId":"45598221-ddbe-4775-ba2e-f6a1ec902f07","source":"web"}
+2026-10-27 16:46:17,412 - INFO - Mensagem recebida de 556634211496@s.whatsapp.net: Olá! Seja bem-vindo ao nosso atendimento.
+
+Por favor, escolha o setor desejado:
+
+1️⃣ - Financeiro
+2️⃣ - Vendas
+3️⃣ - Oficina
+
+Responda apenas com o número da opção desejada.
+2026-10-27 16:46:18,147 - INFO - Resposta da Evolution (Enviar): Status 201 - {"key":{"remoteJid":"556634211496@s.whatsapp.net","fromMe":true,"id":"3EB014F73825BDFC126CC6"},"pushName":"Você","status":"PENDING","message":{"conversation":"Opção inválida. Por favor, escolha o setor desejado:\n\n1️⃣ - Financeiro\n2️⃣ - Vendas\n3️⃣ - Oficina\n\nResponda apenas com o número da opção desejada."},"contextInfo":{"mentionedJid":[],"groupMentions":[],"ephemeralSettingTimestamp":{"low":1792961174,"high":0,"unsigned":false},"disappearingMode":{"initiator":0}},"messageType":"conversation","messageTimestamp":1793133974,"instanceId":"45598221-ddbe-4775-ba2e-f6a1ec902f07","source":"web"}
+2026-10-27 16:46:19,325 - INFO - Mensagem recebida de 556634211496@s.whatsapp.net: Olá! Seja bem-vindo ao nosso atendimento.
+
+Por favor, escolha o setor desejado:
+
+1️⃣ - Financeiro
+2️⃣ - Vendas
+3️⃣ - Oficina
+
+Responda apenas com o número da opção desejada.
+2026-10-27 16:46:20,060 - INFO - Resposta da Evolution (Enviar): Status 201 - {"key":{"remoteJid":"556634211496@s.whatsapp.net","fromMe":true,"id":"3EB00B2A4050B517AFC387"},"pushName":"Você","status":"PENDING","message":{"conversation":"Opção inválida. Por favor, escolha o setor desejado:\n\n1️⃣ - Financeiro\n2️⃣ - Vendas\n3️⃣ - Oficina\n\nResponda apenas com o número da opção desejada."},"contextInfo":{"mentionedJid":[],"groupMentions":[],"ephemeralSettingTimestamp":{"low":1792961176,"high":0,"unsigned":false},"disappearingMode":{"initiator":0}},"messageType":"conversation","messageTimestamp":1793133976,"instanceId":"45598221-ddbe-4775-ba2e-f6a1ec902f07","source":"web"}
+2026-10-27 16:46:21,140 - INFO - Mensagem recebida de 556634211496@s.whatsapp.net: Olá! Seja bem-vindo ao nosso atendimento.
+
+Por favor, escolha o setor desejado:
+
+1️⃣ - Financeiro
+2️⃣ - Vendas
+3️⃣ - Oficina
+
+Responda apenas com o número da opção desejada.
+2026-10-27 16:46:21,910 - INFO - Resposta da Evolution (Enviar): Status 201 - {"key":{"remoteJid":"556634211496@s.whatsapp.net","fromMe":true,"id":"3EB0DAF6E1E36CEC2A5F6A"},"pushName":"Você","status":"PENDING","message":{"conversation":"Opção inválida. Por favor, escolha o setor desejado:\n\n1️⃣ - Financeiro\n2️⃣ - Vendas\n3️⃣ - Oficina\n\nResponda apenas com o número da opção desejada."},"contextInfo":{"mentionedJid":[],"groupMentions":[],"ephemeralSettingTimestamp":{"low":1792961178,"high":0,"unsigned":false},"disappearingMode":{"initiator":0}},"messageType":"conversation","messageTimestamp":1793133978,"instanceId":"45598221-ddbe-4775-ba2e-f6a1ec902f07","source":"web"}
+2026-10-27 16:46:23,040 - INFO - Mensagem recebida de 556634211496@s.whatsapp.net: Olá! Seja bem-vindo ao nosso atendimento.
+
+Por favor, escolha o setor desejado:
+
+1️⃣ - Financeiro
+2️⃣ - Vendas
+3️⃣ - Oficina
+
+Responda apenas com o número da opção desejada.
+2026-10-27 16:46:23,832 - INFO - Resposta da Evolution (Enviar): Status 201 - {"key":{"remoteJid":"556634211496@s.whatsapp.net","fromMe":true,"id":"3EB080D69FF0ED02775583"},"pushName":"Você","status":"PENDING","message":{"conversation":"Opção inválida. Por favor, escolha o setor desejado:\n\n1️⃣ - Financeiro\n2️⃣ - Vendas\n3️⃣ - Oficina\n\nResponda apenas com o número da opção desejada."},"contextInfo":{"mentionedJid":[],"groupMentions":[],"ephemeralSettingTimestamp":{"low":1792961180,"high":0,"unsigned":false},"disappearingMode":{"initiator":0}},"messageType":"conversation","messageTimestamp":1793133980,"instanceId":"45598221-ddbe-4775-ba2e-f6a1ec902f07","source":"web"}
+2026-10-27 16:46:24,967 - INFO - Mensagem recebida de 556634211496@s.whatsapp.net: Olá! Seja bem-vindo ao nosso atendimento.
+
+Por favor, escolha o setor desejado:
+
+1️⃣ - Financeiro
+2️⃣ - Vendas
+3️⃣ - Oficina
+
+Responda apenas com o número da opção desejada.
+2026-10-27 16:46:25,739 - INFO - Resposta da Evolution (Enviar): Status 201 - {"key":{"remoteJid":"556634211496@s.whatsapp.net","fromMe":true,"id":"3EB01F8BFBD981170B02E1"},"pushName":"Você","status":"PENDING","message":{"conversation":"Opção inválida. Por favor, escolha o setor desejado:\n\n1️⃣ - Financeiro\n2️⃣ - Vendas\n3️⃣ - Oficina\n\nResponda apenas com o número da opção desejada."},"contextInfo":{"mentionedJid":[],"groupMentions":[],"ephemeralSettingTimestamp":{"low":1792961182,"high":0,"unsigned":false},"disappearingMode":{"initiator":0}},"messageType":"conversation","messageTimestamp":1793133982,"instanceId":"45598221-ddbe-4775-ba2e-f6a1ec902f07","source":"web"}
+2026-10-27 16:46:26,851 - INFO - Mensagem recebida de 556634211496@s.whatsapp.net: Olá! Seja bem-vindo ao nosso atendimento.
+
+Por favor, escolha o setor desejado:
+
+1️⃣ - Financeiro
+2️⃣ - Vendas
+3️⃣ - Oficina
+
+Responda apenas com o número da opção desejada.
+2026-10-27 16:46:27,610 - INFO - Resposta da Evolution (Enviar): Status 201 - {"key":{"remoteJid":"556634211496@s.whatsapp.net","fromMe":true,"id":"3EB065D3A0E3E1BFFA8D81"},"pushName":"Você","status":"PENDING","message":{"conversation":"Opção inválida. Por favor, escolha o setor desejado:\n\n1️⃣ - Financeiro\n2️⃣ - Vendas\n3️⃣ - Oficina\n\nResponda apenas com o número da opção desejada."},"contextInfo":{"mentionedJid":[],"groupMentions":[],"ephemeralSettingTimestamp":{"low":1792961184,"high":0,"unsigned":false},"disappearingMode":{"initiator":0}},"messageType":"conversation","messageTimestamp":1793133984,"instanceId":"45598221-ddbe-4775-ba2e-f6a1ec902f07","source":"web"}
+2026-10-27 16:46:28,746 - INFO - Mensagem recebida de 556634211496@s.whatsapp.net: Olá! Seja bem-vindo ao nosso atendimento.
+
+Por favor, escolha o setor desejado:
+
+1️⃣ - Financeiro
+2️⃣ - Vendas
+3️⃣ - Oficina
+
+Responda apenas com o número da opção desejada.
+2026-10-27 16:46:29,546 - INFO - Resposta da Evolution (Enviar): Status 201 - {"key":{"remoteJid":"556634211496@s.whatsapp.net","fromMe":true,"id":"3EB0218496A11FD3F30F8B"},"pushName":"Você","status":"PENDING","message":{"conversation":"Opção inválida. Por favor, escolha o setor desejado:\n\n1️⃣ - Financeiro\n2️⃣ - Vendas\n3️⃣ - Oficina\n\nResponda apenas com o número da opção desejada."},"contextInfo":{"mentionedJid":[],"groupMentions":[],"ephemeralSettingTimestamp":{"low":1792961186,"high":0,"unsigned":false},"disappearingMode":{"initiator":0}},"messageType":"conversation","messageTimestamp":1793133986,"instanceId":"45598221-ddbe-4775-ba2e-f6a1ec902f07","source":"web"}
+2026-10-27 16:46:30,725 - INFO - Mensagem recebida de 556634211496@s.whatsapp.net: Olá! Seja bem-vindo ao nosso atendimento.
+
+Por favor, escolha o setor desejado:
+
+1️⃣ - Financeiro
+2️⃣ - Vendas
+3️⃣ - Oficina
+
+Responda apenas com o número da opção desejada.
+2026-10-27 16:46:31,525 - INFO - Resposta da Evolution (Enviar): Status 201 - {"key":{"remoteJid":"556634211496@s.whatsapp.net","fromMe":true,"id":"3EB0056355DF85632DF6AA"},"pushName":"Você","status":"PENDING","message":{"conversation":"Opção inválida. Por favor, escolha o setor desejado:\n\n1️⃣ - Financeiro\n2️⃣ - Vendas\n3️⃣ - Oficina\n\nResponda apenas com o número da opção desejada."},"contextInfo":{"mentionedJid":[],"groupMentions":[],"ephemeralSettingTimestamp":{"low":1792961188,"high":0,"unsigned":false},"disappearingMode":{"initiator":0}},"messageType":"conversation","messageTimestamp":1793133988,"instanceId":"45598221-ddbe-4775-ba2e-f6a1ec902f07","source":"web"}
+2026-10-27 16:46:32,683 - INFO - Mensagem recebida de 556634211496@s.whatsapp.net: Olá! Seja bem-vindo ao nosso atendimento.
+
+Por favor, escolha o setor desejado:
+
+1️⃣ - Financeiro
+2️⃣ - Vendas
+3️⃣ - Oficina
+
+Responda apenas com o número da opção desejada.
+2026-10-27 16:46:33,462 - INFO - Resposta da Evolution (Enviar): Status 201 - {"key":{"remoteJid":"556634211496@s.whatsapp.net","fromMe":true,"id":"3EB0B6DD640A6E5BACA700"},"pushName":"Você","status":"PENDING","message":{"conversation":"Opção inválida. Por favor, escolha o setor desejado:\n\n1️⃣ - Financeiro\n2️⃣ - Vendas\n3️⃣ - Oficina\n\nResponda apenas com o número da opção desejada."},"contextInfo":{"mentionedJid":[],"groupMentions":[],"ephemeralSettingTimestamp":{"low":1792961190,"high":0,"unsigned":false},"disappearingMode":{"initiator":0}},"messageType":"conversation","messageTimestamp":1793133990,"instanceId":"45598221-ddbe-4775-ba2e-f6a1ec902f07","source":"web"}
