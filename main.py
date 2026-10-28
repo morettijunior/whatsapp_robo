@@ -3,7 +3,17 @@ import requests
 import os
 import logging
 import uvicorn
+import random
+import string
 from dotenv import load_dotenv
+
+# Importa os serviços que criamos
+from service_bd import (
+    buscar_cliente_por_documento, 
+    salvar_ou_atualizar_senha_robo, 
+    verificar_senha_robo
+)
+from service_email import enviar_email_senha_provisoria
 
 # Configuração do Arquivo de Log na mesma pasta do executável
 log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.log")
@@ -61,6 +71,23 @@ def enviar_mensagem(number: str, text: str):
     except Exception as e:
         logging.error(f"Erro ao enviar mensagem para a Evolution API: {e}")
 
+def mascarar_email(email):
+    """Mascara o e-mail para exibição segura no WhatsApp (ex: rondo****@gmail.com)"""
+    if "@" not in email:
+        return "***@***.com"
+    partes = email.split("@")
+    usuario = partes[0]
+    dominio = partes[1]
+    if len(usuario) > 3:
+        usuario_mascarado = usuario[:3] + "****"
+    else:
+        usuario_mascarado = usuario + "****"
+    return f"{usuario_mascarado}@{dominio}"
+
+def gerar_senha_aleatoria(tamanho=6):
+    caracteres = string.ascii_uppercase + string.digits
+    return "".join(random.choice(caracteres) for _ in range(tamanho))
+
 @app.post("/webhook")
 async def webhook_handler(request: Request):
     try:
@@ -74,10 +101,19 @@ async def webhook_handler(request: Request):
                 
             remote_jid = data.get("key", {}).get("remoteJid")
             
-            # Extrai apenas os números do JID (ex: "5566999998888@s.whatsapp.net" vira "5566999998888")
+            # Extrai apenas os números do JID
             numero_limpo = remote_jid.split("@")[0] if remote_jid else ""
             
-            # Se o número estiver na lista de ignorados, o bot ignora e não responde
+            # =========================================================================
+            # TRAVA TEMPORÁRIA PARA TESTES:
+            # Ignora tudo e permite apenas o número de teste autorizado (6634211496)
+            # =========================================================================
+            NUMERO_AUTORIZADO_TESTE = "556634211496"
+            if numero_limpo != NUMERO_AUTORIZADO_TESTE:
+                return {"status": "ignored_test_mode"}
+            # =========================================================================
+
+            # (Mantida a lógica oficial para o futuro)
             if numero_limpo in NUMEROS_IGNORADOS:
                 logging.info(f"Mensagem ignorada do número interno: {numero_limpo}")
                 return {"status": "ignored_internal"}
@@ -150,7 +186,8 @@ async def webhook_handler(request: Request):
                         "1️⃣ - Financeiro\n"
                         "2️⃣ - Vendas\n"
                         "3️⃣ - Oficina\n\n"
-                        "Responda apenas com o número da opção desejada."
+                        "Responda apenas com o número da opção desejada.\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
                     )
 
             # ==========================================
@@ -164,17 +201,23 @@ async def webhook_handler(request: Request):
                         "📂 *Contas a Receber*\n\n"
                         "Escolha a opção desejada:\n\n"
                         "1️⃣ - Gestão Financeira (Notas, Boletos e Relatórios)\n"
-                        "2️⃣ - Falar com Atendente Humano"
+                        "2️⃣ - Falar com Atendente Humano\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
                     )
                 elif message_body == "2": # Contas a Pagar
                     session["state"] = "contas_a_pagar_atendente"
                     enviar_mensagem(
                         remote_jid,
                         "💳 Você selecionou *Contas a Pagar*.\n\n"
-                        "Um atendente do setor financeiro já foi notificado e logo irá atendê-lo por aqui!"
+                        "Um atendente do setor financeiro já foi notificado e logo irá atendê-lo por aqui!\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
                     )
                 else:
-                    enviar_mensagem(remote_jid, "Opção inválida. Digite *1* para Contas a Receber ou *2* para Contas a Pagar.")
+                    enviar_mensagem(
+                        remote_jid, 
+                        "Opção inválida. Digite *1* para Contas a Receber ou *2* para Contas a Pagar.\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
+                    )
 
             # ==========================================
             # ETAPA 3: SUBMENU FINANCEIRO
@@ -188,15 +231,21 @@ async def webhook_handler(request: Request):
                         "Para sua segurança, identifique-se:\n\n"
                         "1️⃣ - Fazer Login\n"
                         "2️⃣ - Solicitar Senha (Primeiro Acesso)\n"
-                        "3️⃣ - Alterar Senha"
+                        "3️⃣ - Alterar Senha\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
                     )
                 elif message_body == "2": # Falar com Atendente
                     enviar_mensagem(
                         remote_jid,
-                        "👤 Um atendente do financeiro foi notificado para lhe auxiliar com Contas a Receber."
+                        "👤 Um atendente do financeiro foi notificado para lhe auxiliar com Contas a Receber.\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
                     )
                 else:
-                    enviar_mensagem(remote_jid, "Opção inválida. Digite *1* para Gestão Financeira ou *2* para Falar com Atendente.")
+                    enviar_mensagem(
+                        remote_jid, 
+                        "Opção inválida. Digite *1* para Gestão Financeira ou *2* para Falar com Atendente.\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
+                    )
 
             # ==========================================
             # ETAPA 4: MENU DE ACESSO
@@ -204,43 +253,208 @@ async def webhook_handler(request: Request):
             elif current_state == "menu_acesso":
                 if message_body == "1": # Fazer Login
                     session["state"] = "login_aguardando_cnpj"
-                    enviar_mensagem(remote_jid, "Por favor, digite o seu **CNPJ** (apenas números):")
+                    enviar_mensagem(
+                        remote_jid, 
+                        "Por favor, digite o seu **CNPJ ou CPF** (apenas números ou formatado):\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
+                    )
                 elif message_body == "2": # Solicitar Senha
                     session["state"] = "solicitar_senha_aguardando_cnpj"
-                    enviar_mensagem(remote_jid, "Para solicitar sua senha provisória, digite o seu **CNPJ** (apenas números):")
+                    enviar_mensagem(
+                        remote_jid, 
+                        "Para solicitar sua senha provisória, digite o seu **CNPJ ou CPF**:\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
+                    )
                 elif message_body == "3": # Alterar Senha
                     session["state"] = "alterar_senha_aguardando_cnpj"
-                    enviar_mensagem(remote_jid, "Para alterar sua senha, digite o seu **CNPJ**:")
+                    enviar_mensagem(
+                        remote_jid, 
+                        "Para alterar sua senha, digite o seu **CNPJ ou CPF**:\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
+                    )
                 else:
-                    enviar_mensagem(remote_jid, "Opção inválida. Escolha entre *1*, *2* ou *3*.")
+                    enviar_mensagem(
+                        remote_jid, 
+                        "Opção inválida. Escolha entre *1*, *2* ou *3*.\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
+                    )
 
-            # --- FLUXO DE SOLICITAR SENHA ---
+            # ==========================================
+            # FLUXO DE SOLICITAR SENHA (INTEGRADO AO ERP)
+            # ==========================================
             elif current_state == "solicitar_senha_aguardando_cnpj":
-                session["dados"]["cnpj"] = message_body
-                session["state"] = "solicitar_senha_aguardando_email"
-                enviar_mensagem(remote_jid, "Agora, digite o seu **E-mail cadastrado**:")
+                resultado = buscar_cliente_por_documento(message_body)
+                
+                if resultado["status"] == "erro_formato":
+                    enviar_mensagem(
+                        remote_jid,
+                        "❌ *Formato inválido!*\n"
+                        "Um CPF deve conter exatamente 11 dígitos e um CNPJ 14 dígitos.\n"
+                        "Por favor, digite novamente o seu **CNPJ ou CPF**:\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
+                    )
+                elif resultado["status"] == "nao_encontrado":
+                    enviar_mensagem(
+                        remote_jid,
+                        "❌ *CNPJ/CPF não encontrado* em nossa base de dados.\n"
+                        "Verifique os números digitados ou entre em contato com o nosso suporte financeiro.\n\n"
+                        "*(Envie 0 ou menu para retornar ao menu principal)*"
+                    )
+                    session["state"] = "menu_principal"
+                elif resultado["status"] == "encontrado":
+                    email_completo = resultado["email"]
+                    
+                    if not email_completo:
+                        # CORREÇÃO: Evita o limbo oferecendo as opções 1 ou 0
+                        session["state"] = "aguardando_opcao_email_vazio"
+                        enviar_mensagem(
+                            remote_jid,
+                            f"Encontramos o cadastro: *{resultado['nome']}*\n\n"
+                            "⚠️ Não encontramos um e-mail cadastrado para o seu CNPJ/CPF no sistema.\n\n"
+                            "Como deseja prosseguir?\n"
+                            "1️⃣ - Falar com o Setor Financeiro (Atualizar cadastro)\n"
+                            "0️⃣ - Voltar ao Menu Principal\n\n"
+                            "*(Responda com 1 ou 0)*"
+                        )
+                        return {"status": "success"}
+                        
+                    # Salva dados temporários na sessão
+                    session["dados"]["codcfo"] = resultado["codcfo"]
+                    session["dados"]["nome"] = resultado["nome"]
+                    session["dados"]["email"] = email_completo
+                    
+                    email_mascarado = mascarar_email(email_completo)
+                    session["state"] = "solicitar_senha_confirmar_email"
+                    
+                    enviar_mensagem(
+                        remote_jid,
+                        f"Encontramos o cadastro: *{resultado['nome']}*\n\n"
+                        f"O e-mail cadastrado para envio da senha é: *{email_mascarado}*\n\n"
+                        "O e-mail está correto?\n"
+                        "1️⃣ - Sim, enviar senha provisória para este e-mail\n"
+                        "2️⃣ - Não, o e-mail está incorreto\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
+                    )
 
-            elif current_state == "solicitar_senha_aguardando_email":
-                cnpj = session["dados"].get("cnpj")
-                email = message_body
-                session["state"] = "submenu_financeiro"
-                enviar_mensagem(
-                    remote_jid, 
-                    f"✅ Verificação concluída para o CNPJ {cnpj}.\n"
-                    f"Uma senha provisória foi enviada para o e-mail: {email}.\n\n"
-                    "Retornando ao submenu financeiro. Escolha 1 para Gestão Financeira e faça seu login."
-                )
+            # CORREÇÃO: Tratamento para o cliente sem e-mail não ficar no limbo
+            elif current_state == "aguardando_opcao_email_vazio":
+                if message_body == "1":
+                    session["state"] = "menu_principal"
+                    texto_pre_fabricado = (
+                        "Olá, preciso cadastrar/atualizar o meu e-mail no sistema da Rondochassis "
+                        "para conseguir solicitar a senha do robô WhatsApp."
+                    )
+                    link_financeiro = f"https://wa.me/556634211496?text={requests.utils.quote(texto_pre_fabricado)}"
+                    enviar_mensagem(
+                        remote_jid,
+                        "Para atualizar seu e-mail e liberar o acesso, fale diretamente com o financeiro clicando no link abaixo:\n\n"
+                        f"{link_financeiro}\n\n"
+                        "💡 Após a atualização, envie *0* ou *menu* para voltar aqui e solicitar sua senha."
+                    )
+                elif message_body == "0":
+                    user_sessions[remote_jid] = {"state": "menu_principal", "dados": {}}
+                    enviar_mensagem(
+                        remote_jid, 
+                        "Olá! Seja bem-vindo ao atendimento da *Rondochassis*.\n\n"
+                        "Por favor, escolha o setor desejado:\n\n"
+                        "1️⃣ - Financeiro\n"
+                        "2️⃣ - Vendas\n"
+                        "3️⃣ - Oficina\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
+                    )
+                else:
+                    enviar_mensagem(
+                        remote_jid,
+                        "Opção inválida. Digite *1* para falar com o financeiro ou *0* para retornar ao menu principal."
+                    )
 
-            # --- FLUXO DE FAZER LOGIN ---
+            elif current_state == "solicitar_senha_confirmar_email":
+                if message_body == "1": # E-mail correto -> Gera e envia
+                    codcfo = session["dados"].get("codcfo")
+                    nome = session["dados"].get("nome")
+                    email = session["dados"].get("email")
+                    
+                    nova_senha = gerar_senha_aleatoria()
+                    
+                    # Salva na tabela ROBOWHATS
+                    salvar_ou_atualizar_senha_robo(codcfo, nome, email, nova_senha)
+                    
+                    # Dispara o e-mail
+                    enviado = enviar_email_senha_provisoria(email, nome, nova_senha)
+                    
+                    email_mascarado = mascarar_email(email)
+                    
+                    if enviado:
+                        session["state"] = "submenu_financeiro"
+                        enviar_mensagem(
+                            remote_jid,
+                            f"✅ Uma senha provisória foi enviada com sucesso para o e-mail: *{email_mascarado}*.\n\n"
+                            "Utilize-a para fazer seu login na opção 1 do menu anterior.\n\n"
+                            "Retornando ao submenu financeiro."
+                        )
+                    else:
+                        enviar_mensagem(
+                            remote_jid,
+                            "❌ Houve uma falha técnica ao disparar o e-mail. Por favor, tente novamente mais tarde ou contate o financeiro."
+                        )
+                        session["state"] = "menu_principal"
+                        
+                elif message_body == "2": # E-mail incorreto -> Mensagem pré-fabricada
+                    session["state"] = "menu_principal"
+                    texto_pre_fabricado = (
+                        "Olá, preciso atualizar o meu e-mail de cadastro no sistema da Rondochassis "
+                        "para conseguir receber a senha do robô WhatsApp."
+                    )
+                    link_financeiro = f"https://wa.me/556634211496?text={requests.utils.quote(texto_pre_fabricado)}"
+                    
+                    enviar_mensagem(
+                        remote_jid,
+                        "Entendido! Como o seu e-mail precisa ser atualizado, por favor clique no link abaixo "
+                        "para falar diretamente com o nosso setor financeiro e solicitar a correção:\n\n"
+                        f"{link_financeiro}\n\n"
+                        "💡 Após a alteração pelo financeiro, volte aqui e solicite sua senha novamente."
+                    )
+                else:
+                    enviar_mensagem(
+                        remote_jid,
+                        "Opção inválida. Digite *1* se o e-mail estiver correto ou *2* se estiver incorreto.\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
+                    )
+
+            # ==========================================
+            # FLUXO DE FAZER LOGIN
+            # ==========================================
             elif current_state == "login_aguardando_cnpj":
-                session["dados"]["cnpj"] = message_body
-                session["state"] = "login_aguardando_senha"
-                enviar_mensagem(remote_jid, "Digite a sua **Senha**:")
+                resultado = buscar_cliente_por_documento(message_body)
+                
+                if resultado["status"] == "erro_formato":
+                    enviar_mensagem(
+                        remote_jid,
+                        "❌ *Formato inválido!* Digite corretamente o seu **CNPJ ou CPF**:\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
+                    )
+                elif resultado["status"] == "nao_encontrado":
+                    enviar_mensagem(
+                        remote_jid,
+                        "❌ *CNPJ/CPF não encontrado* em nossa base de dados.\n\n"
+                        "*(Envie 0 ou menu para voltar)*"
+                    )
+                    session["state"] = "menu_principal"
+                elif resultado["status"] == "encontrado":
+                    session["dados"]["codcfo"] = resultado["codcfo"]
+                    session["state"] = "login_aguardando_senha"
+                    enviar_mensagem(
+                        remote_jid,
+                        "Por favor, digite a sua **Senha** (ou a provisória recebida por e-mail):\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
+                    )
 
             elif current_state == "login_aguardando_senha":
-                cnpj = session["dados"].get("cnpj")
-                senha = message_body
-                login_sucesso = True # Simulado por enquanto
+                codcfo = session["dados"].get("codcfo")
+                senha_digitada = message_body
+                
+                # Valida na tabela ROBOWHATS
+                login_sucesso = verificar_senha_robo(codcfo, senha_digitada)
                 
                 if login_sucesso:
                     session["state"] = "menu_gestao_logado"
@@ -254,23 +468,75 @@ async def webhook_handler(request: Request):
                     )
                 else:
                     session["state"] = "menu_acesso"
-                    enviar_mensagem(remote_jid, "❌ CNPJ ou Senha inválidos. Tente novamente no menu de acesso.")
+                    enviar_mensagem(
+                        remote_jid,
+                        "❌ *Senha incorreta!* Se você esqueceu sua senha, solicite uma nova senha provisória no menu de acesso.\n\n"
+                        "Retornando ao menu de acesso."
+                    )
 
-            # --- FLUXO DE ALTERAR SENHA ---
+            # ==========================================
+            # FLUXO DE ALTERAR SENHA
+            # ==========================================
             elif current_state == "alterar_senha_aguardando_cnpj":
-                session["dados"]["cnpj"] = message_body
-                session["state"] = "alterar_senha_aguardando_senha_atual"
-                enviar_mensagem(remote_jid, "Digite a sua **Senha Atual** (ou a provisória que recebeu por e-mail):")
+                resultado = buscar_cliente_por_documento(message_body)
+                
+                if resultado["status"] == "erro_formato":
+                    enviar_mensagem(
+                        remote_jid,
+                        "❌ *Formato inválido!* Digite corretamente o seu **CNPJ ou CPF**:\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
+                    )
+                elif resultado["status"] == "nao_encontrado":
+                    enviar_mensagem(
+                        remote_jid,
+                        "❌ *CNPJ/CPF não encontrado* em nossa base de dados.\n\n"
+                        "*(Envie 0 ou menu para voltar)*"
+                    )
+                    session["state"] = "menu_principal"
+                elif resultado["status"] == "encontrado":
+                    session["dados"]["codcfo"] = resultado["codcfo"]
+                    session["state"] = "alterar_senha_aguardando_senha_atual"
+                    enviar_mensagem(
+                        remote_jid,
+                        "Digite a sua **Senha Atual** (ou a provisória que recebeu por e-mail):\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
+                    )
 
             elif current_state == "alterar_senha_aguardando_senha_atual":
-                session["dados"]["senha_atual"] = message_body
-                session["state"] = "alterar_senha_aguardando_senha_nova"
-                enviar_mensagem(remote_jid, "Digite a **Nova Senha** desejada:")
+                codcfo = session["dados"].get("codcfo")
+                senha_atual = message_body
+                
+                # Verifica se a senha atual confere
+                if verificar_senha_robo(codcfo, senha_atual):
+                    session["state"] = "alterar_senha_aguardando_senha_nova"
+                    enviar_mensagem(
+                        remote_jid,
+                        "Digite a **Nova Senha** desejada:\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
+                    )
+                else:
+                    session["state"] = "menu_acesso"
+                    enviar_mensagem(
+                        remote_jid,
+                        "❌ *Senha atual incorreta!* Se você esqueceu sua senha, solicite uma nova pelo menu de acesso.\n\n"
+                        "Retornando ao menu de acesso."
+                    )
 
             elif current_state == "alterar_senha_aguardando_senha_nova":
-                cnpj = session["dados"].get("cnpj")
-                senha_atual = session["dados"].get("senha_atual")
-                senha_nova = message_body
+                codcfo = session["dados"].get("codcfo")
+                nova_senha = message_body
+                
+                from service_bd import _obter_conexao_bd
+                conn = _obter_conexao_bd()
+                cursor = conn.cursor()
+                cursor.execute("SELECT NOME, EMAIL FROM ROBOWHATS WHERE CODCFO = ?", (codcfo,))
+                row = cursor.fetchone()
+                conn.close()
+                
+                if row:
+                    nome, email = row
+                    salvar_ou_atualizar_senha_robo(codcfo, nome, email, nova_senha)
+                    
                 session["state"] = "submenu_financeiro"
                 enviar_mensagem(
                     remote_jid,
@@ -287,16 +553,22 @@ async def webhook_handler(request: Request):
                     enviar_mensagem(
                         remote_jid,
                         "📊 Gerando seu *Relatório de Pedidos em Aberto*...\n\n"
-                        "*(O documento PDF será enviado em instantes)*"
+                        "*(O documento PDF será enviado em instantes)*\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
                     )
                 elif message_body == "2": # Solicitar Notas e Boletos
                     enviar_mensagem(
                         remote_jid,
                         "📄 Buscando suas *Notas Fiscais e Boletos* disponíveis...\n\n"
-                        "*(Os arquivos serão enviados por aqui)*"
+                        "*(Os arquivos serão enviados por aqui)*\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
                     )
                 else:
-                    enviar_mensagem(remote_jid, "Opção inválida no menu logado. Digite *1* ou *2*.")
+                    enviar_mensagem(
+                        remote_jid, 
+                        "Opção inválida no menu logado. Digite *1* ou *2*.\n\n"
+                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
+                    )
                     
         return {"status": "success"}
     except Exception as e:

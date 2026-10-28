@@ -7,3 +7,5 @@ __pycache__/
 venv/
 .env
 *teste*
+config_sistema.json
+criar_tabela_robo.py
