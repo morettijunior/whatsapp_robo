@@ -171,9 +171,10 @@ def consultar_relatorio_pedidos_90_dias(codcfo_cliente):
             END = os.IDMOV
         )
         WHERE f.CODCFO = ?
-          AND f.PAGREC = 'R'
-          AND f.STATUSLAN IN ('A', 'B')
-          AND f.DATAEMISSAO >= CURRENT_DATE - 90
+  AND f.PAGREC = 'R'
+  AND f.STATUSLAN IN ('A', 'B')
+  AND f.DATAEMISSAO >= CURRENT_DATE - 90
+  AND f.CODTDO IN ('DP', 'BO', 'NF')
         ORDER BY f.DATAEMISSAO ASC, f.PARCELA ASC
     """
     
