@@ -275,7 +275,7 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
             f.STATUSLAN,
             f.PARCELA,
             f.IDFATLAN,
-            orig.IDMOV AS IDMOV_ORIGEM,
+            COALESCE(orig.IDMOV, orig_via_ponte.IDMOV) AS IDMOV_ORIGEM,
             t.NUMEROMOV,
             t.DATAEMISSAO,
             t.VALORLIQUIDO,
@@ -288,8 +288,13 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
             nfs_ev.NUMERONFSE,
             os.NUMEROMOV
         FROM FLAN f
-        JOIN FLAN orig ON orig.IDFAT = f.IDFATLAN AND orig.IDMOV IS NOT NULL
-        LEFT JOIN TMOV t ON t.IDMOV = orig.IDMOV
+        -- Caminho 1: Ligação direta por lote
+        LEFT JOIN FLAN orig ON orig.IDFAT = f.IDFATLAN AND orig.IDMOV IS NOT NULL
+        -- Caminho 2: Ligação via nota intermediária (Ponte)
+        LEFT JOIN FLAN ponte ON ponte.IDFAT = f.IDFATLAN AND ponte.IDMOV IS NULL
+        LEFT JOIN FLAN orig_via_ponte ON orig_via_ponte.IDFAT = ponte.IDFATLAN AND orig_via_ponte.IDMOV IS NOT NULL
+        
+        LEFT JOIN TMOV t ON t.IDMOV = COALESCE(orig.IDMOV, orig_via_ponte.IDMOV)
         LEFT JOIN TNFEMUNICIPAL nfs ON nfs.IDMOV = t.IDMOV
         LEFT JOIN TMOV ev ON (
             CASE 
@@ -312,6 +317,7 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
           AND f.DATAEMISSAO >= CURRENT_DATE - 90
           AND f.CODTDO IN ('DP', 'BO', 'NF')
           AND f.IDMOV IS NULL
+          AND (orig.IDMOV IS NOT NULL OR orig_via_ponte.IDMOV IS NOT NULL)
         ORDER BY f.DATAEMISSAO ASC, f.PARCELA ASC
     """
     
@@ -319,7 +325,6 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
     linhas = cursor.fetchall()
     lancamentos = {}
     
-    # Conjunto global para rastrear IDs de lançamentos financeiros já computados para este cliente
     ids_lan_ja_processados = set()
     
     for row in linhas:
@@ -344,27 +349,11 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
                 if len(v_partes) == 3:
                     venc_str = f"{v_partes[2]}/{v_partes[1]}/{v_partes[0]}"
             
-            serie_limpa = str(serie).strip().upper() if serie else ""
-            ev_serie_limpa = str(ev_serie).strip().upper() if ev_serie else ""
-            
             placa = "-"
             if ev_placa and str(ev_placa).strip() and str(ev_placa).strip().upper() != "NONE":
                 placa = str(ev_placa).strip()
             elif placa_tmov and str(placa_tmov).strip() and str(placa_tmov).strip().upper() != "NONE":
                 placa = str(placa_tmov).strip()
-            
-            numero_nota_fiscal = ""
-            if nfs_numfse:
-                numero_nota_fiscal = str(nfs_numfse).strip()
-            elif ev_nfs_numfse:
-                numero_nota_fiscal = str(ev_nfs_numfse).strip()
-            elif serie_limpa in ("NFS", "1") and num_mov:
-                numero_nota_fiscal = str(num_mov).strip().lstrip("0")
-            elif ev_serie_limpa in ("NFS", "1") and ev_num_mov:
-                numero_nota_fiscal = str(ev_num_mov).strip().lstrip("0")
-            
-            if not numero_nota_fiscal and num_doc and str(num_doc).strip():
-                numero_nota_fiscal = str(num_doc).strip()
 
             num_pedido = ""
             if ev_num_mov:
@@ -373,7 +362,7 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
                 num_pedido = str(num_mov).strip().lstrip("0")
             
             if not num_pedido and num_doc:
-                num_pedido = str(num_doc).strip().lstrip("0")
+                num_pedido = str(num_doc).split('/')[0].strip().lstrip("0")
 
             num_os = ""
             if os_num_mov:
@@ -394,12 +383,39 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
                 "OS": num_os,
                 "PEDIDO": num_pedido,
                 "PLACA": placa,
-                "NOTA": numero_nota_fiscal,
+                "NFE_VAL": "",
+                "NFS_VAL": "",
+                "NOTA": "",
                 "VALOR_TOTAL": 0.0,
                 "PARCELAS": []
             }
         
-        # Garante que cada IDLAN único seja adicionado às parcelas apenas uma vez
+        serie_limpa = str(serie).strip().upper() if serie else ""
+        ev_serie_limpa = str(ev_serie).strip().upper() if ev_serie else ""
+        
+        # Captura NFS (Serviço)
+        if nfs_numfse or serie_limpa == "NFS" or ev_serie_limpa == "NFS":
+            val_nfs = nfs_numfse or ev_nfs_numfse or (num_mov if serie_limpa == "NFS" else ev_num_mov)
+            if val_nfs:
+                lancamentos[chave_agrupamento]["NFS_VAL"] = str(val_nfs).strip().lstrip("0")
+                
+        # Captura NFE (Mercadoria / CODTDO 1)
+        if serie_limpa == "1" or ev_serie_limpa == "1" or (num_mov and serie_limpa not in ("NFS", "EV")):
+            val_nfe = num_mov if serie_limpa in ("1", "") or serie_limpa not in ("NFS", "EV") else ev_num_mov
+            if val_nfe:
+                lancamentos[chave_agrupamento]["NFE_VAL"] = str(val_nfe).strip().lstrip("0")
+
+        # Fallback para documentos compostos
+        if not lancamentos[chave_agrupamento]["NFE_VAL"] and not lancamentos[chave_agrupamento]["NFS_VAL"] and num_doc:
+            doc_limpo = str(num_doc).strip()
+            if "/" in doc_limpo:
+                partes = doc_limpo.split('/')
+                if len(partes) >= 2:
+                    lancamentos[chave_agrupamento]["NFE_VAL"] = partes[0].strip().lstrip("0")
+                    lancamentos[chave_agrupamento]["NFS_VAL"] = partes[1].strip().lstrip("0")
+            else:
+                lancamentos[chave_agrupamento]["NFE_VAL"] = doc_limpo.lstrip("0")
+
         if id_lan not in ids_lan_ja_processados:
             ids_lan_ja_processados.add(id_lan)
             
@@ -418,9 +434,19 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
                 "STATUS": "BAIXADO" if str(status_lan).strip().upper() == "B" else "ABERTO"
             })
 
-    # Calcula o VALOR_TOTAL somando exatamente as parcelas recolhidas
+    # Pós-processamento: Organiza estritamente na ordem NFE seguida de NFS com espaçamento visual
     resultado_final = []
     for item in lancamentos.values():
+        nfe = item.pop("NFE_VAL")
+        nfs = item.pop("NFS_VAL")
+        
+        partes_nota = []
+        if nfe:
+            partes_nota.append(nfe)
+        if nfs:
+            partes_nota.append(nfs)
+            
+        item["NOTA"] = "  ".join(partes_nota) if partes_nota else "-"
         item["VALOR_TOTAL"] = sum(p["VALOR"] for p in item["PARCELAS"])
         resultado_final.append(item)
 
