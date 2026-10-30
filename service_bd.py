@@ -125,15 +125,12 @@ def verificar_senha_robo(codcfo, senha_digitada):
     finally:
         conn.close()
 
-def consultar_relatorio_pedidos_90_dias(codcfo_cliente):
-    conn = _obter_conexao_bd()
-    if not conn:
-        return []
 
-    cursor = conn.cursor()
-    codcfo_limpo = codcfo_cliente.strip()
-    
-    sql_unificado = """
+# -------------------------------------------------------------------------
+# 1. BLOCO DE PEDIDOS COMUNS (Mantido 100% idêntico à base estável)
+# -------------------------------------------------------------------------
+def _consultar_pedidos_comuns(cursor, codcfo_limpo):
+    sql_comum = """
         SELECT 
             f.IDMOV,
             f.NUMERODOCUMENTO,
@@ -171,102 +168,288 @@ def consultar_relatorio_pedidos_90_dias(codcfo_cliente):
             END = os.IDMOV
         )
         WHERE f.CODCFO = ?
-  AND f.PAGREC = 'R'
-  AND f.STATUSLAN IN ('A', 'B')
-  AND f.DATAEMISSAO >= CURRENT_DATE - 90
-  AND f.CODTDO IN ('DP', 'BO', 'NF')
+          AND f.PAGREC = 'R'
+          AND f.STATUSLAN IN ('A', 'B')
+          AND f.DATAEMISSAO >= CURRENT_DATE - 90
+          AND f.CODTDO IN ('DP', 'BO', 'NF')
+          AND f.IDMOV IS NOT NULL
         ORDER BY f.DATAEMISSAO ASC, f.PARCELA ASC
     """
     
-    try:
-        cursor.execute(sql_unificado, (codcfo_limpo,))
-        linhas = cursor.fetchall()
+    cursor.execute(sql_comum, (codcfo_limpo,))
+    linhas = cursor.fetchall()
+    lancamentos = {}
+    
+    for row in linhas:
+        (
+            id_mov, num_doc, dt_emissao_flan, dt_venc, val_orig, status_lan, parcela,
+            num_mov, dt_emissao_tmov, valor_liq, placa_tmov, id_mov_relac, serie,
+            nfs_numfse,
+            ev_num_mov, ev_placa, ev_relac,
+            os_num_mov
+        ) = row
         
-        lancamentos_por_idmov = {}
-        
-        for row in linhas:
-            (
-                id_mov, num_doc, dt_emissao_flan, dt_venc, val_orig, status_lan, parcela,
-                num_mov, dt_emissao_tmov, valor_liq, placa_tmov, id_mov_relac, serie,
-                nfs_numfse,
-                ev_num_mov, ev_placa, ev_relac,
-                os_num_mov
-            ) = row
+        if not id_mov:
+            continue
             
-            if not id_mov:
-                continue
-                
-            if id_mov not in lancamentos_por_idmov:
-                venc_str = ""
-                if dt_venc:
-                    v_partes = str(dt_venc).split()[0].split("-")
-                    if len(v_partes) == 3:
-                        venc_str = f"{v_partes[2]}/{v_partes[1]}/{v_partes[0]}"
-                
-                serie_limpa = str(serie).strip().upper() if serie else ""
-                
-                # Captura correta da Placa (prioriza a placa da TMOV principal ou do E.V.)
-                placa = "-"
-                if placa_tmov and str(placa_tmov).strip() and str(placa_tmov).strip().upper() != "NONE":
-                    placa = str(placa_tmov).strip()
-                elif ev_placa and str(ev_placa).strip() and str(ev_placa).strip().upper() != "NONE":
-                    placa = str(ev_placa).strip()
-                
-                numero_nota_fiscal = ""
-                if serie_limpa == "NFS":
-                    if nfs_numfse:
-                        numero_nota_fiscal = str(nfs_numfse).strip()
-                    else:
-                        numero_nota_fiscal = str(num_mov).strip().lstrip("0") if num_mov else ""
-                elif serie_limpa == "1":
+        if id_mov not in lancamentos:
+            venc_str = ""
+            if dt_venc:
+                v_partes = str(dt_venc).split()[0].split("-")
+                if len(v_partes) == 3:
+                    venc_str = f"{v_partes[2]}/{v_partes[1]}/{v_partes[0]}"
+            
+            serie_limpa = str(serie).strip().upper() if serie else ""
+            
+            placa = "-"
+            if placa_tmov and str(placa_tmov).strip() and str(placa_tmov).strip().upper() != "NONE":
+                placa = str(placa_tmov).strip()
+            elif ev_placa and str(ev_placa).strip() and str(ev_placa).strip().upper() != "NONE":
+                placa = str(ev_placa).strip()
+            
+            numero_nota_fiscal = ""
+            if serie_limpa == "NFS":
+                if nfs_numfse:
+                    numero_nota_fiscal = str(nfs_numfse).strip()
+                else:
                     numero_nota_fiscal = str(num_mov).strip().lstrip("0") if num_mov else ""
+            elif serie_limpa == "1":
+                numero_nota_fiscal = str(num_mov).strip().lstrip("0") if num_mov else ""
 
-                num_pedido = ""
-                if ev_num_mov:
-                    num_pedido = str(ev_num_mov).strip().lstrip("0")
-                elif num_mov:
-                    num_pedido = str(num_mov).strip().lstrip("0")
-                
-                if not num_pedido and num_doc:
-                    num_pedido = str(num_doc).strip().lstrip("0")
-
-                num_os = ""
-                if os_num_mov:
-                    num_os = str(os_num_mov).strip().lstrip("0")
-
-                data_str = ""
-                if dt_emissao_tmov:
-                    dt_partes = str(dt_emissao_tmov).split()[0].split("-")
-                    if len(dt_partes) == 3:
-                        data_str = f"{dt_partes[2]}/{dt_partes[1]}/{dt_partes[0]}"
-                elif dt_emissao_flan:
-                    dt_partes = str(dt_emissao_flan).split()[0].split("-")
-                    if len(dt_partes) == 3:
-                        data_str = f"{dt_partes[2]}/{dt_partes[1]}/{dt_partes[0]}"
-
-                valor_total = float(valor_liq) if valor_liq else float(val_orig or 0)
-
-                lancamentos_por_idmov[id_mov] = {
-                    "DATA": data_str,
-                    "OS": num_os,
-                    "PEDIDO": num_pedido,
-                    "PLACA": placa,
-                    "NOTA": numero_nota_fiscal,
-                    "VALOR_TOTAL": valor_total,
-                    "PARCELAS": []
-                }
+            num_pedido = ""
+            if ev_num_mov:
+                num_pedido = str(ev_num_mov).strip().lstrip("0")
+            elif num_mov:
+                num_pedido = str(num_mov).strip().lstrip("0")
             
-            lancamentos_por_idmov[id_mov]["PARCELAS"].append({
+            if not num_pedido and num_doc:
+                num_pedido = str(num_doc).strip().lstrip("0")
+
+            num_os = ""
+            if os_num_mov:
+                num_os = str(os_num_mov).strip().lstrip("0")
+
+            data_str = ""
+            if dt_emissao_tmov:
+                dt_partes = str(dt_emissao_tmov).split()[0].split("-")
+                if len(dt_partes) == 3:
+                    data_str = f"{dt_partes[2]}/{dt_partes[1]}/{dt_partes[0]}"
+            elif dt_emissao_flan:
+                dt_partes = str(dt_emissao_flan).split()[0].split("-")
+                if len(dt_partes) == 3:
+                    data_str = f"{dt_partes[2]}/{dt_partes[1]}/{dt_partes[0]}"
+
+            valor_total = float(valor_liq) if valor_liq else float(val_orig or 0)
+
+            lancamentos[id_mov] = {
+                "DATA": data_str,
+                "OS": num_os,
+                "PEDIDO": num_pedido,
+                "PLACA": placa,
+                "NOTA": numero_nota_fiscal,
+                "VALOR_TOTAL": valor_total,
+                "PARCELAS": []
+            }
+        
+        lancamentos[id_mov]["PARCELAS"].append({
+            "PARCELA": parcela if parcela else 1,
+            "VENCIMENTO": venc_str if 'venc_str' in locals() else "",
+            "VALOR": float(val_orig) if val_orig else 0.0,
+            "STATUS": "BAIXADO" if str(status_lan).strip().upper() == "B" else "ABERTO"
+        })
+
+    return list(lancamentos.values())
+
+
+# -------------------------------------------------------------------------
+# 2. BLOCO DE PEDIDOS AGRUPADOS (Isolado e seguro para investigações futuras)
+# -------------------------------------------------------------------------
+def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
+    sql_agrupado = """
+        SELECT 
+            f.IDLAN,
+            f.NUMERODOCUMENTO,
+            f.DATAEMISSAO,
+            f.DATAVENCIMENTO,
+            f.VALORORIGINAL,
+            f.STATUSLAN,
+            f.PARCELA,
+            f.IDFATLAN,
+            orig.IDMOV AS IDMOV_ORIGEM,
+            t.NUMEROMOV,
+            t.DATAEMISSAO,
+            t.VALORLIQUIDO,
+            t.OB_NUMEROSERIE,
+            t.SERIE,
+            nfs.NUMERONFSE,
+            ev.NUMEROMOV,
+            ev.OB_NUMEROSERIE,
+            ev.SERIE,
+            nfs_ev.NUMERONFSE,
+            os.NUMEROMOV
+        FROM FLAN f
+        JOIN FLAN orig ON orig.IDFAT = f.IDFATLAN AND orig.IDMOV IS NOT NULL
+        LEFT JOIN TMOV t ON t.IDMOV = orig.IDMOV
+        LEFT JOIN TNFEMUNICIPAL nfs ON nfs.IDMOV = t.IDMOV
+        LEFT JOIN TMOV ev ON (
+            CASE 
+                WHEN UPPER(TRIM(t.SERIE)) IN ('NFS', '1') THEN t.IDMOVRELAC
+                WHEN UPPER(TRIM(t.SERIE)) = 'EV' THEN t.IDMOV
+                ELSE t.IDMOV
+            END = ev.IDMOV
+        )
+        LEFT JOIN TNFEMUNICIPAL nfs_ev ON nfs_ev.IDMOV = ev.IDMOV
+        LEFT JOIN TMOV os ON (
+            CASE 
+                WHEN UPPER(TRIM(t.SERIE)) = 'EV' THEN t.IDMOVRELAC
+                WHEN UPPER(TRIM(t.SERIE)) IN ('NFS', '1') THEN ev.IDMOVRELAC
+                ELSE NULL
+            END = os.IDMOV
+        )
+        WHERE f.CODCFO = ?
+          AND f.PAGREC = 'R'
+          AND f.STATUSLAN IN ('A', 'B')
+          AND f.DATAEMISSAO >= CURRENT_DATE - 90
+          AND f.CODTDO IN ('DP', 'BO', 'NF')
+          AND f.IDMOV IS NULL
+        ORDER BY f.DATAEMISSAO ASC, f.PARCELA ASC
+    """
+    
+    cursor.execute(sql_agrupado, (codcfo_limpo,))
+    linhas = cursor.fetchall()
+    lancamentos = {}
+    
+    # Conjunto global para rastrear IDs de lançamentos financeiros já computados para este cliente
+    ids_lan_ja_processados = set()
+    
+    for row in linhas:
+        (
+            id_lan, num_doc, dt_emissao_flan, dt_venc, val_orig, status_lan, parcela,
+            idfatlan, id_mov_origem,
+            num_mov, dt_emissao_tmov, valor_liq, placa_tmov, serie,
+            nfs_numfse,
+            ev_num_mov, ev_placa, ev_serie, ev_nfs_numfse,
+            os_num_mov
+        ) = row
+        
+        if not idfatlan:
+            continue
+            
+        chave_agrupamento = f"AGR_{idfatlan}"
+        
+        if chave_agrupamento not in lancamentos:
+            venc_str = ""
+            if dt_venc:
+                v_partes = str(dt_venc).split()[0].split("-")
+                if len(v_partes) == 3:
+                    venc_str = f"{v_partes[2]}/{v_partes[1]}/{v_partes[0]}"
+            
+            serie_limpa = str(serie).strip().upper() if serie else ""
+            ev_serie_limpa = str(ev_serie).strip().upper() if ev_serie else ""
+            
+            placa = "-"
+            if ev_placa and str(ev_placa).strip() and str(ev_placa).strip().upper() != "NONE":
+                placa = str(ev_placa).strip()
+            elif placa_tmov and str(placa_tmov).strip() and str(placa_tmov).strip().upper() != "NONE":
+                placa = str(placa_tmov).strip()
+            
+            numero_nota_fiscal = ""
+            if nfs_numfse:
+                numero_nota_fiscal = str(nfs_numfse).strip()
+            elif ev_nfs_numfse:
+                numero_nota_fiscal = str(ev_nfs_numfse).strip()
+            elif serie_limpa in ("NFS", "1") and num_mov:
+                numero_nota_fiscal = str(num_mov).strip().lstrip("0")
+            elif ev_serie_limpa in ("NFS", "1") and ev_num_mov:
+                numero_nota_fiscal = str(ev_num_mov).strip().lstrip("0")
+            
+            if not numero_nota_fiscal and num_doc and str(num_doc).strip():
+                numero_nota_fiscal = str(num_doc).strip()
+
+            num_pedido = ""
+            if ev_num_mov:
+                num_pedido = str(ev_num_mov).strip().lstrip("0")
+            elif num_mov:
+                num_pedido = str(num_mov).strip().lstrip("0")
+            
+            if not num_pedido and num_doc:
+                num_pedido = str(num_doc).strip().lstrip("0")
+
+            num_os = ""
+            if os_num_mov:
+                num_os = str(os_num_mov).strip().lstrip("0")
+
+            data_str = ""
+            if dt_emissao_tmov:
+                dt_partes = str(dt_emissao_tmov).split()[0].split("-")
+                if len(dt_partes) == 3:
+                    data_str = f"{dt_partes[2]}/{dt_partes[1]}/{dt_partes[0]}"
+            elif dt_emissao_flan:
+                dt_partes = str(dt_emissao_flan).split()[0].split("-")
+                if len(dt_partes) == 3:
+                    data_str = f"{dt_partes[2]}/{dt_partes[1]}/{dt_partes[0]}"
+
+            lancamentos[chave_agrupamento] = {
+                "DATA": data_str,
+                "OS": num_os,
+                "PEDIDO": num_pedido,
+                "PLACA": placa,
+                "NOTA": numero_nota_fiscal,
+                "VALOR_TOTAL": 0.0,
+                "PARCELAS": []
+            }
+        
+        # Garante que cada IDLAN único seja adicionado às parcelas apenas uma vez
+        if id_lan not in ids_lan_ja_processados:
+            ids_lan_ja_processados.add(id_lan)
+            
+            venc_parc_str = ""
+            if dt_venc:
+                v_partes = str(dt_venc).split()[0].split("-")
+                if len(v_partes) == 3:
+                    venc_parc_str = f"{v_partes[2]}/{v_partes[1]}/{v_partes[0]}"
+
+            valor_parcela = float(val_orig) if val_orig else 0.0
+
+            lancamentos[chave_agrupamento]["PARCELAS"].append({
                 "PARCELA": parcela if parcela else 1,
-                "VENCIMENTO": venc_str if 'venc_str' in locals() else "",
-                "VALOR": float(val_orig) if val_orig else 0.0,
+                "VENCIMENTO": venc_parc_str,
+                "VALOR": valor_parcela,
                 "STATUS": "BAIXADO" if str(status_lan).strip().upper() == "B" else "ABERTO"
             })
 
-        return list(lancamentos_por_idmov.values())
+    # Calcula o VALOR_TOTAL somando exatamente as parcelas recolhidas
+    resultado_final = []
+    for item in lancamentos.values():
+        item["VALOR_TOTAL"] = sum(p["VALOR"] for p in item["PARCELAS"])
+        resultado_final.append(item)
+
+    return resultado_final
+
+
+# -------------------------------------------------------------------------
+# 3. ORQUESTRADOR PRINCIPAL
+# -------------------------------------------------------------------------
+def consultar_relatorio_pedidos_90_dias(codcfo_cliente):
+    conn = _obter_conexao_bd()
+    if not conn:
+        return []
+
+    cursor = conn.cursor()
+    codcfo_limpo = codcfo_cliente.strip()
+    
+    try:
+        # Executa as duas consultas de forma totalmente isolada e segura
+        lista_comuns = _consultar_pedidos_comuns(cursor, codcfo_limpo)
+        lista_agrupados = _consultar_pedidos_agrupados(cursor, codcfo_limpo)
+        
+        # Junta os resultados unificados para o PDF
+        resultado_final = lista_comuns + lista_agrupados
+        
+        return resultado_final
 
     except Exception as e:
-        logging.error(f"Erro na consulta de 90 dias: {e}")
+        logging.error(f"Erro na consulta unificada de 90 dias: {e}")
         return []
     finally:
         conn.close()
