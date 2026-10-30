@@ -13,7 +13,10 @@ from service_bd import (
     buscar_cliente_por_documento, 
     salvar_ou_atualizar_senha_robo, 
     verificar_senha_robo,
-    consultar_relatorio_pedidos_90_dias
+    consultar_relatorio_pedidos_90_dias,
+    _obter_conexao_bd,
+    _consultar_pedidos_comuns,
+    _consultar_pedidos_agrupados
 )
 from service_email import enviar_email_senha_provisoria
 from service_pdf import gerar_pdf_relatorio_90_dias
@@ -347,7 +350,6 @@ async def webhook_handler(request: Request):
                     return {"status": "success"}
 
                 codcfo = session["dados"].get("codcfo")
-                from service_bd import _obter_conexao_bd
                 conn = _obter_conexao_bd()
                 cursor = conn.cursor()
                 cursor.execute("SELECT NOME, EMAIL FROM ROBOWHATS WHERE CODCFO = ?", (codcfo,))
@@ -383,15 +385,154 @@ async def webhook_handler(request: Request):
                         enviar_mensagem(remote_jid, "⚠️ Nenhum lançamento financeiro encontrado nos últimos 90 dias.")
                     else:
                         # Gera o PDF
-                        caminho_pdf = gerando_pdf = gerar_pdf_relatorio_90_dias(nome_cliente, documento_cliente, pedidos)
+                        caminho_pdf = gerar_pdf_relatorio_90_dias(nome_cliente, documento_cliente, pedidos)
                         
                         # Envia o PDF via WhatsApp
                         enviar_documento_evolution(remote_jid, caminho_pdf, "relatorio_pedidos_90_dias.pdf")
+                    
+                    # Mantém o usuário logado e retorna ao menu de gestão
+                    session["state"] = "menu_gestao_logado"
+                    enviar_mensagem(
+                        remote_jid,
+                        "Menu Gestão Financeira:\n\n"
+                        "1️⃣ - Relatório de Pedidos em Aberto (90 dias)\n"
+                        "2️⃣ - Solicitar Notas e Boletos"
+                    )
                         
-                elif message_body == "2":
-                    enviar_mensagem(remote_jid, "📄 Módulo de Notas e Boletos em desenvolvimento.")
+                elif message_body == "2": # Solicitar Notas e Boletos (Lista com layout de células ajustado)
+                    codcfo = session["dados"].get("codcfo")
+                    
+                    conn = _obter_conexao_bd()
+                    cursor = conn.cursor()
+                    comuns = _consultar_pedidos_comuns(cursor, codcfo)
+                    agrupados = _consultar_pedidos_agrupados(cursor, codcfo)
+                    conn.close()
+                    
+                    todos_pedidos = comuns + agrupados
+                    todos_pedidos = sorted(todos_pedidos, key=lambda x: x.get("DATA", ""))
+                    
+                    if not todos_pedidos:
+                        enviar_mensagem(remote_jid, "📭 Nenhum pedido encontrado nos últimos 90 dias.")
+                    else:
+                        # Armazena a lista na sessão para recuperar na próxima etapa
+                        session["dados"]["lista_pedidos"] = todos_pedidos
+                        session["state"] = "aguardando_selecao_pedido"
+                        
+                        pedidos_pagos = []
+                        pedidos_abertos = []
+                        
+                        for item in todos_pedidos:
+                            parcelas = item.get("PARCELAS", [])
+                            tem_aberto = any(str(p.get("STATUS", "")).upper() == "ABERTO" for p in parcelas)
+                            
+                            if tem_aberto:
+                                pedidos_abertos.append(item)
+                            else:
+                                pedidos_pagos.append(item)
+                        
+                        # Função interna para formatar cada item no estilo célula exato solicitado
+                        def montar_bloco_celula(item, idx):
+                            os_val = item.get("OS")
+                            pedido = item.get("PEDIDO", "-")
+                            nota = item.get("NOTA", "-")
+                            data = item.get("DATA", "-")
+                            valor_total = item.get("VALOR_TOTAL", 0.0)
+                            parcelas = item.get("PARCELAS", [])
+                            
+                            if isinstance(nota, str) and " " in nota.strip():
+                                nota = ", ".join(nota.split())
+                            
+                            if os_val and str(os_val).strip() and str(os_val).strip() != "-":
+                                identificador = f"O.S. {os_val}"
+                            else:
+                                identificador = f"Ped. {pedido}"
+                            
+                            # Layout de células e destaques solicitados
+                            bloco = f"┌─────────────────────────\n"
+                            bloco += f"│ *[{idx}]* {identificador} 📅 {data}\n"
+                            bloco += f"│ 🧾 NOTA: {nota}\n"
+                            
+                            for p in parcelas:
+                                p_num = p.get("PARCELA", 1)
+                                p_venc = p.get("VENCIMENTO", "--/--/----")
+                                p_val = p.get("VALOR", 0.0)
+                                p_status = str(p.get("STATUS", "")).upper() # ABERTO ou BAIXADO
+                                status_txt = "PAGO" if p_status == "BAIXADO" else "ABERTO"
+                                
+                                bloco += f"│ PARC {p_num} VENC {p_venc}\n"
+                                bloco += f"│ R$ {p_val:,.2f} - {status_txt}\n"
+                            
+                            bloco += f"│ 💰 TOTAL: R$ {valor_total:,.2f}\n"
+                            bloco += f"└─────────────────────────\n\n"
+                            return bloco
+
+                        texto_resposta = "📋 *CONSULTA DE PEDIDOS E NOTAS*\n\n"
+                        
+                        # Seção 1: PEDIDOS PAGOS
+                        texto_resposta += "🟢 *--- PEDIDOS PAGOS ---*\n\n"
+                        if pedidos_pagos:
+                            for item in pedidos_pagos:
+                                idx = todos_pedidos.index(item) + 1
+                                texto_resposta += montar_bloco_celula(item, idx)
+                        else:
+                            texto_resposta += "Nenhum pedido pago no período.\n\n"
+                        
+                        # Seção 2: PEDIDOS EM ABERTO
+                        texto_resposta += "🟠 *--- PEDIDOS EM ABERTO ---*\n\n"
+                        if pedidos_abertos:
+                            for item in pedidos_abertos:
+                                idx = todos_pedidos.index(item) + 1
+                                texto_resposta += montar_bloco_celula(item, idx)
+                        else:
+                            texto_resposta += "Nenhum pedido em aberto no período.\n\n"
+                            
+                        texto_resposta += "Digite o número do item desejado (ou 0 para voltar):"
+                        enviar_mensagem(remote_jid, texto_resposta)
                 else:
                     enviar_mensagem(remote_jid, "Opção inválida. Digite 1 ou 2.")
+
+            # ==========================================
+            # ETAPA 6: SELEÇÃO DE PEDIDO PARA NOTAS/BOLETOS
+            # ==========================================
+            elif current_state == "aguardando_selecao_pedido":
+                if message_body == "0":
+                    session["state"] = "menu_gestao_logado"
+                    enviar_mensagem(
+                        remote_jid,
+                        "Menu Gestão Financeira:\n\n"
+                        "1️⃣ - Relatório de Pedidos em Aberto (90 dias)\n"
+                        "2️⃣ - Solicitar Notas e Boletos"
+                    )
+                elif message_body.isdigit():
+                    escolha = int(message_body)
+                    lista_pedidos = session["dados"].get("lista_pedidos", [])
+                    
+                    if 1 <= escolha <= len(lista_pedidos):
+                        pedido_selecionado = lista_pedidos[escolha - 1]
+                        session["dados"]["pedido_selecionado"] = pedido_selecionado
+                        session["state"] = "processando_envio_documento"
+                        
+                        num_ped = pedido_selecionado.get('PEDIDO')
+                        num_not = pedido_selecionado.get('NOTA')
+                        
+                        enviar_mensagem(
+                            remote_jid,
+                            f"✅ Você selecionou:\nPedido: {num_ped} | Nota: {num_not}\n\n"
+                            "Gerando e enviando os documentos solicitados..."
+                        )
+                        
+                        # Retorna ao menu de gestão mantendo a sessão logada
+                        session["state"] = "menu_gestao_logado"
+                        enviar_mensagem(
+                            remote_jid,
+                            "Menu Gestão Financeira:\n\n"
+                            "1️⃣ - Relatório de Pedidos em Aberto (90 dias)\n"
+                            "2️⃣ - Solicitar Notas e Boletos"
+                        )
+                    else:
+                        enviar_mensagem(remote_jid, "❌ Número inválido! Escolha um item da lista ou digite 0 para voltar.")
+                else:
+                    enviar_mensagem(remote_jid, "❌ Digite apenas o número correspondente ao item desejado.")
                     
         return {"status": "success"}
     except Exception as e:
