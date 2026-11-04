@@ -41,7 +41,7 @@ PORT = int(os.getenv("PORT", 5000))
 
 logging.info(f"Iniciando bot (Módulo Financeiro). EVOLUTION_URL={EVOLUTION_URL}, INSTANCE={INSTANCE_NAME}")
 
-# Dicionário para guardar o estado atual e dados temporários de cada cliente
+# Dicionário para guardar o estado atual, histórico anterior e dados temporários de cada cliente
 user_sessions = {}
 
 NUMEROS_IGNORADOS = {
@@ -114,6 +114,13 @@ def gerar_senha_aleatoria(tamanho=6):
     caracteres = string.ascii_uppercase + string.digits
     return "".join(random.choice(caracteres) for _ in range(tamanho))
 
+def mudar_estado(session, novo_estado):
+    """Atualiza o estado guardando o anterior para o mecanismo de voltar (0)"""
+    estado_atual = session.get("state")
+    if estado_atual and estado_atual != novo_estado:
+        session["prev_state"] = estado_atual
+    session["state"] = novo_estado
+
 @app.post("/webhook")
 async def webhook_handler(request: Request):
     try:
@@ -144,13 +151,14 @@ async def webhook_handler(request: Request):
             logging.info(f"Mensagem recebida de {remote_jid}: {message_body}")
             
             if remote_jid not in user_sessions:
-                user_sessions[remote_jid] = {"state": "menu_principal", "dados": {}}
+                user_sessions[remote_jid] = {"state": "menu_principal", "prev_state": "menu_principal", "dados": {}}
 
             session = user_sessions[remote_jid]
             current_state = session["state"]
 
-            if message_body.lower() in ["menu", "0", "olá", "ola", "oi", "inicio", "início"]:
-                user_sessions[remote_jid] = {"state": "menu_principal", "dados": {}}
+            # Atalho global para reiniciar do zero absoluto
+            if message_body.lower() in ["menu", "inicio", "início"]:
+                user_sessions[remote_jid] = {"state": "menu_principal", "prev_state": "menu_principal", "dados": {}}
                 enviar_mensagem(
                     remote_jid, 
                     "Olá! Seja bem-vindo ao atendimento da *Rondochassis*.\n\n"
@@ -158,8 +166,82 @@ async def webhook_handler(request: Request):
                     "1️⃣ - Financeiro\n"
                     "2️⃣ - Vendas\n"
                     "3️⃣ - Oficina\n\n"
-                    "*(Envie 0 ou menu a qualquer momento para voltar)*"
+                    "*(Envie 0 a qualquer momento para voltar ao menu anterior)*"
                 )
+                return {"status": "success"}
+
+            # ==========================================
+            # TRATAMENTO GLOBAL DO "0" (VOLTAR AO ANTERIOR)
+            # ==========================================
+            if message_body == "0":
+                if current_state == "menu_principal":
+                    enviar_mensagem(remote_jid, "Você já está no menu principal.")
+                    return {"status": "success"}
+                
+                # Mapeamento de retorno estruturado por hierarquia
+                if current_state == "menu_financeiro_principal":
+                    mudar_estado(session, "menu_principal")
+                    enviar_mensagem(
+                        remote_jid,
+                        "Olá! Seja bem-vindo ao atendimento da *Rondochassis*.\n\n"
+                        "Por favor, escolha o setor desejado:\n\n"
+                        "1️⃣ - Financeiro\n"
+                        "2️⃣ - Vendas\n"
+                        "3️⃣ - Oficina\n\n"
+                        "*(Envie 0 para voltar)*"
+                    )
+                elif current_state == "submenu_financeiro" or current_state == "contas_a_pagar_atendente":
+                    mudar_estado(session, "menu_financeiro_principal")
+                    enviar_mensagem(
+                        remote_jid,
+                        "Você selecionou o *Financeiro* da *Rondochassis*.\n\n"
+                        "Escolha uma opção:\n\n"
+                        "1️⃣ - Contas a Receber\n"
+                        "2️⃣ - Contas a Pagar\n\n"
+                        "0️⃣ - Voltar ao menu anterior"
+                    )
+                elif current_state in ["menu_acesso", "atendente_financeiro"]:
+                    mudar_estado(session, "submenu_financeiro")
+                    enviar_mensagem(
+                        remote_jid,
+                        "📂 *Contas a Receber*\n\n"
+                        "Escolha a opção desejada:\n\n"
+                        "1️⃣ - Gestão Financeira (Notas, Boletos e Relatórios)\n"
+                        "2️⃣ - Falar com Atendente Humano\n\n"
+                        "0️⃣ - Voltar ao menu anterior"
+                    )
+                elif current_state in ["login_aguardando_cnpj", "solicitar_senha_aguardando_cnpj", "alterar_senha_aguardando_cnpj"]:
+                    mudar_estado(session, "menu_acesso")
+                    enviar_mensagem(
+                        remote_jid,
+                        "🔐 *Gestão Financeira*\n\nIdentifique-se:\n\n"
+                        "1️⃣ - Fazer Login\n"
+                        "2️⃣ - Solicitar Senha\n"
+                        "3️⃣ - Alterar Senha\n\n"
+                        "0️⃣ - Voltar ao menu anterior"
+                    )
+                elif current_state == "menu_gestao_logado":
+                    mudar_estado(session, "menu_acesso")
+                    enviar_mensagem(
+                        remote_jid,
+                        "🔐 *Gestão Financeira*\n\nIdentifique-se:\n\n"
+                        "1️⃣ - Fazer Login\n"
+                        "2️⃣ - Solicitar Senha\n"
+                        "3️⃣ - Alterar Senha\n\n"
+                        "0️⃣ - Voltar ao menu anterior"
+                    )
+                elif current_state == "aguardando_selecao_pedido":
+                    mudar_estado(session, "menu_gestao_logado")
+                    enviar_mensagem(
+                        remote_jid,
+                        "🎉 *Menu Gestão Financeira:*\n\n"
+                        "1️⃣ - Relatório de Pedidos em Aberto (90 dias)\n"
+                        "2️⃣ - Solicitar Notas e Boletos\n\n"
+                        "0️⃣ - Voltar ao menu anterior"
+                    )
+                else:
+                    mudar_estado(session, "menu_principal")
+                    enviar_mensagem(remote_jid, "Retornando ao menu principal.")
                 return {"status": "success"}
 
             # ==========================================
@@ -167,21 +249,21 @@ async def webhook_handler(request: Request):
             # ==========================================
             if current_state == "menu_principal":
                 if message_body == "1":
-                    session["state"] = "menu_financeiro_principal"
+                    mudar_estado(session, "menu_financeiro_principal")
                     enviar_mensagem(
                         remote_jid,
                         "Você selecionou o *Financeiro* da *Rondochassis*.\n\n"
                         "Escolha uma opção:\n\n"
                         "1️⃣ - Contas a Receber\n"
                         "2️⃣ - Contas a Pagar\n\n"
-                        "*(Envie 0 ou menu a qualquer momento para voltar)*"
+                        "0️⃣ - Voltar ao menu anterior"
                     )
                 elif message_body == "2":
-                    session["state"] = "vendas"
+                    mudar_estado(session, "vendas")
                     link_vendas = "https://wa.me/556634210400?text=Ol%C3%A1%2C%20vim%20pelo%20menu%20automatizado%20e%20quero%20falar%20com%20Vendas."
                     enviar_mensagem(remote_jid, f"Você selecionou **Vendas**.\n\nPara falar com Vendas, clique no link:\n{link_vendas}")
                 elif message_body == "3":
-                    session["state"] = "oficina"
+                    mudar_estado(session, "oficina")
                     link_oficina = "https://wa.me/5566999847335?text=Ol%C3%A1%2C%20vim%20pelo%20menu%20automatizado%20e%20preciso%20de%20atendimento%20na%20Oficina."
                     enviar_mensagem(remote_jid, f"Você selecionou a **Oficina**.\n\nPara falar com a Oficina, clique no link:\n{link_oficina}")
                 else:
@@ -195,16 +277,17 @@ async def webhook_handler(request: Request):
             # ==========================================
             elif current_state == "menu_financeiro_principal":
                 if message_body == "1":
-                    session["state"] = "submenu_financeiro"
+                    mudar_estado(session, "submenu_financeiro")
                     enviar_mensagem(
                         remote_jid,
                         "📂 *Contas a Receber*\n\n"
                         "Escolha a opção desejada:\n\n"
                         "1️⃣ - Gestão Financeira (Notas, Boletos e Relatórios)\n"
-                        "2️⃣ - Falar com Atendente Humano"
+                        "2️⃣ - Falar com Atendente Humano\n\n"
+                        "0️⃣ - Voltar ao menu anterior"
                     )
                 elif message_body == "2":
-                    session["state"] = "contas_a_pagar_atendente"
+                    mudar_estado(session, "contas_a_pagar_atendente")
                     enviar_mensagem(remote_jid, "💳 Você selecionou *Contas a Pagar*. Um atendente foi notificado.")
                 else:
                     enviar_mensagem(remote_jid, "Opção inválida. Digite 1 ou 2.")
@@ -214,10 +297,14 @@ async def webhook_handler(request: Request):
             # ==========================================
             elif current_state == "submenu_financeiro":
                 if message_body == "1":
-                    session["state"] = "menu_acesso"
+                    mudar_estado(session, "menu_acesso")
                     enviar_mensagem(
                         remote_jid,
-                        "🔐 *Gestão Financeira*\n\nIdentifique-se:\n\n1️⃣ - Fazer Login\n2️⃣ - Solicitar Senha\n3️⃣ - Alterar Senha"
+                        "🔐 *Gestão Financeira*\n\nIdentifique-se:\n\n"
+                        "1️⃣ - Fazer Login\n"
+                        "2️⃣ - Solicitar Senha\n"
+                        "3️⃣ - Alterar Senha\n\n"
+                        "0️⃣ - Voltar ao menu anterior"
                     )
                 elif message_body == "2":
                     enviar_mensagem(remote_jid, "👤 Um atendente do financeiro foi notificado para lhe auxiliar.")
@@ -229,14 +316,14 @@ async def webhook_handler(request: Request):
             # ==========================================
             elif current_state == "menu_acesso":
                 if message_body == "1":
-                    session["state"] = "login_aguardando_cnpj"
-                    enviar_mensagem(remote_jid, "Por favor, digite o seu **CNPJ ou CPF**:")
+                    mudar_estado(session, "login_aguardando_cnpj")
+                    enviar_mensagem(remote_jid, "Por favor, digite o seu **CNPJ ou CPF**:\n\n0️⃣ - Voltar ao menu anterior")
                 elif message_body == "2":
-                    session["state"] = "solicitar_senha_aguardando_cnpj"
-                    enviar_mensagem(remote_jid, "Para solicitar sua senha provisória, digite o seu **CNPJ ou CPF**:")
+                    mudar_estado(session, "solicitar_senha_aguardando_cnpj")
+                    enviar_mensagem(remote_jid, "Para solicitar sua senha provisória, digite o seu **CNPJ ou CPF**:\n\n0️⃣ - Voltar ao menu anterior")
                 elif message_body == "3":
-                    session["state"] = "alterar_senha_aguardando_cnpj"
-                    enviar_mensagem(remote_jid, "Para alterar sua senha, digite o seu **CNPJ ou CPF**:")
+                    mudar_estado(session, "alterar_senha_aguardando_cnpj")
+                    enviar_mensagem(remote_jid, "Para alterar sua senha, digite o seu **CNPJ ou CPF**:\n\n0️⃣ - Voltar ao menu anterior")
                 else:
                     enviar_mensagem(remote_jid, "Opção inválida. Escolha entre 1, 2 ou 3.")
 
@@ -249,27 +336,27 @@ async def webhook_handler(request: Request):
                     enviar_mensagem(remote_jid, "❌ Formato inválido! Digite corretamente o CPF ou CNPJ:")
                 elif resultado["status"] == "nao_encontrado":
                     enviar_mensagem(remote_jid, "❌ CNPJ/CPF não encontrado na base de dados.")
-                    session["state"] = "menu_principal"
+                    mudar_estado(session, "menu_acesso")
                 elif resultado["status"] == "encontrado":
                     email_completo = resultado["email"]
                     if not email_completo:
-                        session["state"] = "aguardando_opcao_email_vazio"
+                        mudar_estado(session, "aguardando_opcao_email_vazio")
                         enviar_mensagem(remote_jid, "⚠️ Não encontramos e-mail cadastrado. Deseja falar com o financeiro? (1 - Sim / 0 - Voltar)")
                         return {"status": "success"}
                         
                     session["dados"]["codcfo"] = resultado["codcfo"]
                     session["dados"]["nome"] = resultado["nome"]
                     session["dados"]["email"] = email_completo
-                    session["state"] = "solicitar_senha_confirmar_email"
-                    enviar_mensagem(remote_jid, f"O e-mail cadastrado é: {mascarar_email(email_completo)}\nConfirma?\n1 - Sim\n2 - Não")
+                    mudar_estado(session, "solicitar_senha_confirmar_email")
+                    enviar_mensagem(remote_jid, f"O e-mail cadastrado é: {mascarar_email(email_completo)}\nConfirma?\n1 - Sim\n0 - Voltar")
 
             elif current_state == "aguardando_opcao_email_vazio":
                 if message_body == "1":
-                    session["state"] = "menu_principal"
+                    mudar_estado(session, "submenu_financeiro")
                     enviar_mensagem(remote_jid, "Entre em contato com o financeiro para cadastrar seu e-mail.")
                 else:
-                    session["state"] = "menu_principal"
-                    enviar_mensagem(remote_jid, "Retornando ao menu principal.")
+                    mudar_estado(session, "menu_acesso")
+                    enviar_mensagem(remote_jid, "Retornando ao menu anterior.")
 
             elif current_state == "solicitar_senha_confirmar_email":
                 if message_body == "1":
@@ -282,13 +369,13 @@ async def webhook_handler(request: Request):
                     enviado = enviar_email_senha_provisoria(email, nome, nova_senha)
                     
                     if enviado:
-                        session["state"] = "submenu_financeiro"
+                        mudar_estado(session, "submenu_financeiro")
                         enviar_mensagem(remote_jid, f"✅ Senha provisória enviada para o e-mail {mascarar_email(email)}.")
                     else:
                         enviar_mensagem(remote_jid, "❌ Falha ao enviar o e-mail. Tente novamente mais tarde.")
-                        session["state"] = "menu_principal"
+                        mudar_estado(session, "menu_acesso")
                 else:
-                    session["state"] = "menu_principal"
+                    mudar_estado(session, "menu_acesso")
                     enviar_mensagem(remote_jid, "Operação cancelada.")
 
             # ==========================================
@@ -300,25 +387,26 @@ async def webhook_handler(request: Request):
                     session["dados"]["codcfo"] = resultado["codcfo"]
                     session["dados"]["nome"] = resultado["nome"]
                     session["dados"]["documento"] = message_body
-                    session["state"] = "login_aguardando_senha"
-                    enviar_mensagem(remote_jid, "Por favor, digite a sua **Senha**:")
+                    mudar_estado(session, "login_aguardando_senha")
+                    enviar_mensagem(remote_jid, "Por favor, digite a sua **Senha**:\n\n0️⃣ - Voltar ao menu anterior")
                 else:
                     enviar_mensagem(remote_jid, "❌ CNPJ/CPF não encontrado.")
-                    session["state"] = "menu_principal"
+                    mudar_estado(session, "menu_acesso")
 
             elif current_state == "login_aguardando_senha":
                 codcfo = session["dados"].get("codcfo")
                 if verificar_senha_robo(codcfo, message_body):
-                    session["state"] = "menu_gestao_logado"
+                    mudar_estado(session, "menu_gestao_logado")
                     enviar_mensagem(
                         remote_jid,
                         "🎉 *Login realizado com sucesso!*\n\n"
                         "Menu Gestão Financeira:\n\n"
                         "1️⃣ - Relatório de Pedidos em Aberto (90 dias)\n"
-                        "2️⃣ - Solicitar Notas e Boletos"
+                        "2️⃣ - Solicitar Notas e Boletos\n\n"
+                        "0️⃣ - Voltar ao menu anterior"
                     )
                 else:
-                    session["state"] = "menu_acesso"
+                    mudar_estado(session, "menu_acesso")
                     enviar_mensagem(remote_jid, "❌ Senha incorreta. Retornando ao menu de acesso.")
 
             # ==========================================
@@ -328,19 +416,19 @@ async def webhook_handler(request: Request):
                 resultado = buscar_cliente_por_documento(message_body)
                 if resultado["status"] == "encontrado":
                     session["dados"]["codcfo"] = resultado["codcfo"]
-                    session["state"] = "alterar_senha_aguardando_senha_atual"
-                    enviar_mensagem(remote_jid, "Digite a sua **Senha Atual**:")
+                    mudar_estado(session, "alterar_senha_aguardando_senha_atual")
+                    enviar_mensagem(remote_jid, "Digite a sua **Senha Atual**:\n\n0️⃣ - Voltar ao menu anterior")
                 else:
                     enviar_mensagem(remote_jid, "❌ CNPJ/CPF não encontrado.")
-                    session["state"] = "menu_principal"
+                    mudar_estado(session, "menu_acesso")
 
             elif current_state == "alterar_senha_aguardando_senha_atual":
                 codcfo = session["dados"].get("codcfo")
                 if verificar_senha_robo(codcfo, message_body):
-                    session["state"] = "alterar_senha_aguardando_senha_nova"
-                    enviar_mensagem(remote_jid, "Digite a **Nova Senha** (exatamente 6 números):")
+                    mudar_estado(session, "alterar_senha_aguardando_senha_nova")
+                    enviar_mensagem(remote_jid, "Digite a **Nova Senha** (exatamente 6 números):\n\n0️⃣ - Voltar ao menu anterior")
                 else:
-                    session["state"] = "menu_acesso"
+                    mudar_estado(session, "menu_acesso")
                     enviar_mensagem(remote_jid, "❌ Senha atual incorreta.")
 
             elif current_state == "alterar_senha_aguardando_senha_nova":
@@ -360,7 +448,7 @@ async def webhook_handler(request: Request):
                     nome, email = row
                     salvar_ou_atualizar_senha_robo(codcfo, nome, email, nova_senha)
                     
-                session["state"] = "submenu_financeiro"
+                mudar_estado(session, "submenu_financeiro")
                 enviar_mensagem(remote_jid, "🔒 Senha alterada com sucesso!")
 
             # ==========================================
@@ -378,28 +466,25 @@ async def webhook_handler(request: Request):
                     nome_cliente = session["dados"].get("nome", "Cliente")
                     documento_cliente = session["dados"].get("documento", "")
                     
-                    # Executa a consulta unificada no banco
                     pedidos = consultar_relatorio_pedidos_90_dias(codcfo)
                     
                     if not pedidos:
                         enviar_mensagem(remote_jid, "⚠️ Nenhum lançamento financeiro encontrado nos últimos 90 dias.")
                     else:
-                        # Gera o PDF
                         caminho_pdf = gerar_pdf_relatorio_90_dias(nome_cliente, documento_cliente, pedidos)
-                        
-                        # Envia o PDF via WhatsApp
                         enviar_documento_evolution(remote_jid, caminho_pdf, "relatorio_pedidos_90_dias.pdf")
                     
-                    # Mantém o usuário logado e retorna ao menu de gestão
-                    session["state"] = "menu_gestao_logado"
+                    # Mantém o usuário logado e reapresenta o menu
+                    mudar_estado(session, "menu_gestao_logado")
                     enviar_mensagem(
                         remote_jid,
                         "Menu Gestão Financeira:\n\n"
                         "1️⃣ - Relatório de Pedidos em Aberto (90 dias)\n"
-                        "2️⃣ - Solicitar Notas e Boletos"
+                        "2️⃣ - Solicitar Notas e Boletos\n\n"
+                        "0️⃣ - Voltar ao menu anterior"
                     )
                         
-                elif message_body == "2": # Solicitar Notas e Boletos (Lista com layout de células ajustado)
+                elif message_body == "2": # Solicitar Notas e Boletos
                     codcfo = session["dados"].get("codcfo")
                     
                     conn = _obter_conexao_bd()
@@ -414,9 +499,8 @@ async def webhook_handler(request: Request):
                     if not todos_pedidos:
                         enviar_mensagem(remote_jid, "📭 Nenhum pedido encontrado nos últimos 90 dias.")
                     else:
-                        # Armazena a lista na sessão para recuperar na próxima etapa
                         session["dados"]["lista_pedidos"] = todos_pedidos
-                        session["state"] = "aguardando_selecao_pedido"
+                        mudar_estado(session, "aguardando_selecao_pedido")
                         
                         pedidos_pagos = []
                         pedidos_abertos = []
@@ -430,7 +514,6 @@ async def webhook_handler(request: Request):
                             else:
                                 pedidos_pagos.append(item)
                         
-                        # Função interna para formatar cada item no estilo célula exato solicitado
                         def montar_bloco_celula(item, idx):
                             os_val = item.get("OS")
                             pedido = item.get("PEDIDO", "-")
@@ -447,7 +530,6 @@ async def webhook_handler(request: Request):
                             else:
                                 identificador = f"Ped. {pedido}"
                             
-                            # Layout de células com número do item em destaque e data ao lado
                             bloco = f"┌─────────────────────────\n"
                             bloco += f"│ *[{idx}]* {identificador} 📅 {data}\n"
                             bloco += f"│ 🧾 NOTA: {nota}\n"
@@ -456,7 +538,7 @@ async def webhook_handler(request: Request):
                                 p_num = p.get("PARCELA", 1)
                                 p_venc = p.get("VENCIMENTO", "--/--/----")
                                 p_val = p.get("VALOR", 0.0)
-                                p_status = str(p.get("STATUS", "")).upper() # ABERTO ou BAIXADO
+                                p_status = str(p.get("STATUS", "")).upper()
                                 status_txt = "PAGO" if p_status == "BAIXADO" else "ABERTO"
                                 
                                 bloco += f"│ PARC {p_num} VENC {p_venc}\n"
@@ -468,7 +550,6 @@ async def webhook_handler(request: Request):
 
                         texto_resposta = "📋 *CONSULTA DE PEDIDOS E NOTAS*\n\n"
                         
-                        # Seção 1: PEDIDOS PAGOS
                         texto_resposta += "🟢 *--- PEDIDOS PAGOS ---*\n\n"
                         if pedidos_pagos:
                             for item in pedidos_pagos:
@@ -477,7 +558,6 @@ async def webhook_handler(request: Request):
                         else:
                             texto_resposta += "Nenhum pedido pago no período.\n\n"
                         
-                        # Seção 2: PEDIDOS EM ABERTO
                         texto_resposta += "🟠 *--- PEDIDOS EM ABERTO ---*\n\n"
                         if pedidos_abertos:
                             for item in pedidos_abertos:
@@ -495,22 +575,13 @@ async def webhook_handler(request: Request):
             # ETAPA 6: SELEÇÃO DE PEDIDO PARA NOTAS/BOLETOS
             # ==========================================
             elif current_state == "aguardando_selecao_pedido":
-                if message_body == "0":
-                    session["state"] = "menu_gestao_logado"
-                    enviar_mensagem(
-                        remote_jid,
-                        "Menu Gestão Financeira:\n\n"
-                        "1️⃣ - Relatório de Pedidos em Aberto (90 dias)\n"
-                        "2️⃣ - Solicitar Notas e Boletos"
-                    )
-                elif message_body.isdigit():
+                if message_body.isdigit():
                     escolha = int(message_body)
                     lista_pedidos = session["dados"].get("lista_pedidos", [])
                     
                     if 1 <= escolha <= len(lista_pedidos):
                         pedido_selecionado = lista_pedidos[escolha - 1]
                         session["dados"]["pedido_selecionado"] = pedido_selecionado
-                        session["state"] = "processando_envio_documento"
                         
                         num_ped = pedido_selecionado.get('PEDIDO')
                         num_not = pedido_selecionado.get('NOTA')
@@ -521,13 +592,15 @@ async def webhook_handler(request: Request):
                             "Gerando e enviando os documentos solicitados..."
                         )
                         
-                        # Retorna ao menu de gestão mantendo a sessão logada
-                        session["state"] = "menu_gestao_logado"
+                        # Aqui daremos continuidade ao envio dos anexos solicitados
+                        
+                        mudar_estado(session, "menu_gestao_logado")
                         enviar_mensagem(
                             remote_jid,
                             "Menu Gestão Financeira:\n\n"
                             "1️⃣ - Relatório de Pedidos em Aberto (90 dias)\n"
-                            "2️⃣ - Solicitar Notas e Boletos"
+                            "2️⃣ - Solicitar Notas e Boletos\n\n"
+                            "0️⃣ - Voltar ao menu anterior"
                         )
                     else:
                         enviar_mensagem(remote_jid, "❌ Número inválido! Escolha um item da lista ou digite 0 para voltar.")
