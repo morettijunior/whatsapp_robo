@@ -155,7 +155,7 @@ def _consultar_pedidos_comuns(cursor, codcfo_limpo):
         LEFT JOIN TNFEMUNICIPAL nfs ON f.IDMOV = nfs.IDMOV
         LEFT JOIN TMOV ev ON (
             CASE 
-                WHEN UPPER(TRIM(t.SERIE)) IN ('NFS', '1') THEN t.IDMOVRELAC
+                WHEN UPPER(TRIM(t.SERIE)) IN ('005', '1') THEN t.IDMOVRELAC
                 WHEN UPPER(TRIM(t.SERIE)) = 'EV' THEN t.IDMOV
                 ELSE t.IDMOV
             END = ev.IDMOV
@@ -163,7 +163,7 @@ def _consultar_pedidos_comuns(cursor, codcfo_limpo):
         LEFT JOIN TMOV os ON (
             CASE 
                 WHEN UPPER(TRIM(t.SERIE)) = 'EV' THEN t.IDMOVRELAC
-                WHEN UPPER(TRIM(t.SERIE)) IN ('NFS', '1') THEN ev.IDMOVRELAC
+                WHEN UPPER(TRIM(t.SERIE)) IN ('005', '1') THEN ev.IDMOVRELAC
                 ELSE NULL
             END = os.IDMOV
         )
@@ -298,7 +298,7 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
         LEFT JOIN TNFEMUNICIPAL nfs ON nfs.IDMOV = t.IDMOV
         LEFT JOIN TMOV ev ON (
             CASE 
-                WHEN UPPER(TRIM(t.SERIE)) IN ('NFS', '1') THEN t.IDMOVRELAC
+                WHEN UPPER(TRIM(t.SERIE)) IN ('005', '1') THEN t.IDMOVRELAC
                 WHEN UPPER(TRIM(t.SERIE)) = 'EV' THEN t.IDMOV
                 ELSE t.IDMOV
             END = ev.IDMOV
@@ -307,7 +307,7 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
         LEFT JOIN TMOV os ON (
             CASE 
                 WHEN UPPER(TRIM(t.SERIE)) = 'EV' THEN t.IDMOVRELAC
-                WHEN UPPER(TRIM(t.SERIE)) IN ('NFS', '1') THEN ev.IDMOVRELAC
+                WHEN UPPER(TRIM(t.SERIE)) IN ('005', '1') THEN ev.IDMOVRELAC
                 ELSE NULL
             END = os.IDMOV
         )

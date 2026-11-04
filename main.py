@@ -447,7 +447,7 @@ async def webhook_handler(request: Request):
                             else:
                                 identificador = f"Ped. {pedido}"
                             
-                            # Layout de células e destaques solicitados
+                            # Layout de células com número do item em destaque e data ao lado
                             bloco = f"┌─────────────────────────\n"
                             bloco += f"│ *[{idx}]* {identificador} 📅 {data}\n"
                             bloco += f"│ 🧾 NOTA: {nota}\n"
