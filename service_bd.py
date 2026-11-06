@@ -127,7 +127,7 @@ def verificar_senha_robo(codcfo, senha_digitada):
 
 
 # -------------------------------------------------------------------------
-# 1. BLOCO DE PEDIDOS COMUNS (Mantido 100% idêntico à base estável)
+# 1. BLOCO DE PEDIDOS COMUNS
 # -------------------------------------------------------------------------
 def _consultar_pedidos_comuns(cursor, codcfo_limpo):
     sql_comum = """
@@ -149,6 +149,7 @@ def _consultar_pedidos_comuns(cursor, codcfo_limpo):
             ev.NUMEROMOV,
             ev.OB_NUMEROSERIE,
             ev.IDMOVRELAC,
+            ev.SERIE,
             os.NUMEROMOV
         FROM FLAN f
         LEFT JOIN TMOV t ON f.IDMOV = t.IDMOV
@@ -185,7 +186,7 @@ def _consultar_pedidos_comuns(cursor, codcfo_limpo):
             id_mov, num_doc, dt_emissao_flan, dt_venc, val_orig, status_lan, parcela,
             num_mov, dt_emissao_tmov, valor_liq, placa_tmov, id_mov_relac, serie,
             nfs_numfse,
-            ev_num_mov, ev_placa, ev_relac,
+            ev_num_mov, ev_placa, ev_relac, ev_serie,
             os_num_mov
         ) = row
         
@@ -200,6 +201,7 @@ def _consultar_pedidos_comuns(cursor, codcfo_limpo):
                     venc_str = f"{v_partes[2]}/{v_partes[1]}/{v_partes[0]}"
             
             serie_limpa = str(serie).strip().upper() if serie else ""
+            ev_serie_limpa = str(ev_serie).strip().upper() if ev_serie else ""
             
             placa = "-"
             if placa_tmov and str(placa_tmov).strip() and str(placa_tmov).strip().upper() != "NONE":
@@ -207,19 +209,23 @@ def _consultar_pedidos_comuns(cursor, codcfo_limpo):
             elif ev_placa and str(ev_placa).strip() and str(ev_placa).strip().upper() != "NONE":
                 placa = str(ev_placa).strip()
             
+            # Captura rigorosa da NF-e (Série 1 ou numeromov direto da série 1)
             numero_nota_fiscal = ""
-            if serie_limpa == "NFS":
-                if nfs_numfse:
-                    numero_nota_fiscal = str(nfs_numfse).strip()
-                else:
-                    numero_nota_fiscal = str(num_mov).strip().lstrip("0") if num_mov else ""
-            elif serie_limpa == "1":
+            if serie_limpa == "1":
                 numero_nota_fiscal = str(num_mov).strip().lstrip("0") if num_mov else ""
+            elif ev_serie_limpa == "1":
+                numero_nota_fiscal = str(ev_num_mov).strip().lstrip("0") if ev_num_mov else ""
+            elif serie_limpa == "NFS":
+                numero_nota_fiscal = str(nfs_numfse).strip() if nfs_numfse else (str(num_mov).strip().lstrip("0") if num_mov else "")
+            elif not serie_limpa or serie_limpa == "EV":
+                # Se for movimento geral/evento, tenta pegar o num_mov se não for 005
+                if num_mov and serie_limpa != "005":
+                    numero_nota_fiscal = str(num_mov).strip().lstrip("0")
 
             num_pedido = ""
-            if ev_num_mov:
+            if ev_num_mov and ev_serie_limpa != "1":
                 num_pedido = str(ev_num_mov).strip().lstrip("0")
-            elif num_mov:
+            elif num_mov and serie_limpa != "1":
                 num_pedido = str(num_mov).strip().lstrip("0")
             
             if not num_pedido and num_doc:
@@ -262,7 +268,7 @@ def _consultar_pedidos_comuns(cursor, codcfo_limpo):
 
 
 # -------------------------------------------------------------------------
-# 2. BLOCO DE PEDIDOS AGRUPADOS (Isolado e seguro para investigações futuras)
+# 2. BLOCO DE PEDIDOS AGRUPADOS
 # -------------------------------------------------------------------------
 def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
     sql_agrupado = """
@@ -288,9 +294,7 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
             nfs_ev.NUMERONFSE,
             os.NUMEROMOV
         FROM FLAN f
-        -- Caminho 1: Ligação direta por lote
         LEFT JOIN FLAN orig ON orig.IDFAT = f.IDFATLAN AND orig.IDMOV IS NOT NULL
-        -- Caminho 2: Ligação via nota intermediária (Ponte)
         LEFT JOIN FLAN ponte ON ponte.IDFAT = f.IDFATLAN AND ponte.IDMOV IS NULL
         LEFT JOIN FLAN orig_via_ponte ON orig_via_ponte.IDFAT = ponte.IDFATLAN AND orig_via_ponte.IDMOV IS NOT NULL
         
@@ -324,7 +328,6 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
     cursor.execute(sql_agrupado, (codcfo_limpo,))
     linhas = cursor.fetchall()
     lancamentos = {}
-    
     ids_lan_ja_processados = set()
     
     for row in linhas:
@@ -399,13 +402,14 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
             if val_nfs:
                 lancamentos[chave_agrupamento]["NFS_VAL"] = str(val_nfs).strip().lstrip("0")
                 
-        # Captura NFE (Mercadoria / CODTDO 1)
-        if serie_limpa == "1" or ev_serie_limpa == "1" or (num_mov and serie_limpa not in ("NFS", "EV")):
-            val_nfe = num_mov if serie_limpa in ("1", "") or serie_limpa not in ("NFS", "EV") else ev_num_mov
-            if val_nfe:
-                lancamentos[chave_agrupamento]["NFE_VAL"] = str(val_nfe).strip().lstrip("0")
+        # Captura NFE estritamente da Série 1
+        if serie_limpa == "1" and num_mov:
+            lancamentos[chave_agrupamento]["NFE_VAL"] = str(num_mov).strip().lstrip("0")
+        elif ev_serie_limpa == "1" and ev_num_mov:
+            lancamentos[chave_agrupamento]["NFE_VAL"] = str(ev_num_mov).strip().lstrip("0")
+        elif not lancamentos[chave_agrupamento]["NFE_VAL"] and num_mov and serie_limpa != "005":
+            lancamentos[chave_agrupamento]["NFE_VAL"] = str(num_mov).strip().lstrip("0")
 
-        # Fallback para documentos compostos
         if not lancamentos[chave_agrupamento]["NFE_VAL"] and not lancamentos[chave_agrupamento]["NFS_VAL"] and num_doc:
             doc_limpo = str(num_doc).strip()
             if "/" in doc_limpo:
@@ -434,7 +438,6 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
                 "STATUS": "BAIXADO" if str(status_lan).strip().upper() == "B" else "ABERTO"
             })
 
-    # Pós-processamento: Organiza estritamente na ordem NFE seguida de NFS com espaçamento visual
     resultado_final = []
     for item in lancamentos.values():
         nfe = item.pop("NFE_VAL")
@@ -465,13 +468,9 @@ def consultar_relatorio_pedidos_90_dias(codcfo_cliente):
     codcfo_limpo = codcfo_cliente.strip()
     
     try:
-        # Executa as duas consultas de forma totalmente isolada e segura
         lista_comuns = _consultar_pedidos_comuns(cursor, codcfo_limpo)
         lista_agrupados = _consultar_pedidos_agrupados(cursor, codcfo_limpo)
-        
-        # Junta os resultados unificados para o PDF
         resultado_final = lista_comuns + lista_agrupados
-        
         return resultado_final
 
     except Exception as e:

@@ -135,7 +135,6 @@ def gerar_pdf_relatorio_90_dias(nome_cliente, documento_cliente, pedidos):
         Paragraph("", estilo_celula)
     ])
 
-    # Larguras ajustadas com placa mais larga (Total = 552)
     tabela = Table(dados_tabela, colWidths=[60, 40, 45, 40, 65, 75, 227])
     
     tabela.setStyle(TableStyle([

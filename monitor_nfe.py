@@ -1,19 +1,41 @@
 import time
 import shutil
 import os
+from datetime import datetime, timedelta
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 # --- CONFIGURAÇÕES DE CAMINHO ---
-# Raiz local no terminal de faturamento
 RAIZ_LOCAL_PDF = r"C:\TGA\Nfe\PDF"
 RAIZ_LOCAL_XML = r"C:\TGA\Nfe\XML"
 
-# Raiz correspondente no Servidor (substitua "SERVIDOR" pelo IP ou Nome do seu Servidor)
 RAIZ_SERVIDOR_PDF = r"\\SERVIDOR\TGA\Nfe\PDF"
 RAIZ_SERVIDOR_XML = r"\\SERVIDOR\TGA\Nfe\XML"
 
-class SincronizarTgaHandler(FileSystemEventHandler):
+# Janela de retenção (100 dias)
+DIAS_LIMITE = 100
+
+def limpar_pdfs_antigos(diretorio):
+    """Apaga apenas arquivos .pdf com mais de 100 dias, preservando os XMLs"""
+    if not os.path.exists(diretorio):
+        return
+    
+    data_corte = datetime.now() - timedelta(days=DIAS_LIMITE)
+    for pasta_atual, subpastas, arquivos in os.walk(diretorio):
+        for arquivo in arquivos:
+            if arquivo.lower().endswith(".pdf"):
+                caminho_arquivo = os.path.join(pasta_atual, arquivo)
+                try:
+                    timestamp_arquivo = os.path.getmtime(caminho_arquivo)
+                    data_arquivo = datetime.fromtimestamp(timestamp_arquivo)
+                    
+                    if data_arquivo < data_corte:
+                        os.remove(caminho_arquivo)
+                        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] PDF antigo removido da retenção: {arquivo}")
+                except Exception as e:
+                    print(f"Erro ao limpar PDF antigo '{arquivo}': {e}")
+
+class SincronizarEValucarHandler(FileSystemEventHandler):
     def on_created(self, event):
         if event.is_directory:
             return
@@ -22,46 +44,44 @@ class SincronizarTgaHandler(FileSystemEventHandler):
         extensao = os.path.splitext(arquivo_origem)[1].lower()
         
         destino = None
-        
-        # Identifica se pertence à árvore de PDF ou XML e calcula o caminho relativo
         if extensao == ".pdf" and RAIZ_LOCAL_PDF.lower() in arquivo_origem.lower():
-            # Pega o caminho relativo a partir da raiz local e aplica na raiz do servidor
             caminho_relativo = os.path.relpath(arquivo_origem, RAIZ_LOCAL_PDF)
             destino = os.path.join(RAIZ_SERVIDOR_PDF, caminho_relativo)
-            
         elif extensao == ".xml" and RAIZ_LOCAL_XML.lower() in arquivo_origem.lower():
             caminho_relativo = os.path.relpath(arquivo_origem, RAIZ_LOCAL_XML)
             destino = os.path.join(RAIZ_SERVIDOR_XML, caminho_relativo)
             
         if destino:
-            # Aguarda 1 segundo para garantir que o ERP terminou de gravar o arquivo no disco
-            time.sleep(1)
+            time.sleep(1) # Aguarda gravação completa do ERP
             try:
-                # Garante que a subpasta exata (ex: 202610 ou 202610\NFe) exista no servidor
-                pasta_destino_dir = os.path.dirname(destino)
-                os.makedirs(pasta_destino_dir, exist_ok=True)
-                
-                # Copia o arquivo para o servidor mantendo o nome exato
+                os.makedirs(os.path.dirname(destino), exist_ok=True)
                 shutil.copy2(arquivo_origem, destino)
-                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Sincronizado: {destino}")
+                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Sincronizado em tempo real: {destino}")
             except Exception as e:
-                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Erro ao copiar '{arquivo_origem}': {e}")
+                print(f"Erro ao sincronizar arquivo em tempo real: {e}")
 
 if __name__ == "__main__":
-    # Garante que as pastas raiz locais existam
+    # Garante que as pastas locais existam
     for pasta in [RAIZ_LOCAL_PDF, RAIZ_LOCAL_XML]:
         if not os.path.exists(pasta):
             os.makedirs(pasta, exist_ok=True)
 
-    event_handler = SincronizarTgaHandler()
+    print("Iniciando rotina de limpeza de PDFs com mais de 100 dias...")
+    # Limpa no Terminal (Local)
+    limpar_pdfs_antigos(RAIZ_LOCAL_PDF)
+    # Limpa no Servidor
+    limpar_pdfs_antigos(RAIZ_SERVIDOR_PDF)
+    print("Limpeza concluída. Ativando monitoramento em tempo real...")
+
+    # Ativa o watchdog para sincronizar o que vier daqui para frente
+    event_handler = SincronizarEValucarHandler()
     observer = Observer()
     
-    # recursive=True permite monitorar todas as subpastas (AnoMes, NFe, etc.) geradas automaticamente
     observer.schedule(event_handler, path=RAIZ_LOCAL_PDF, recursive=True)
     observer.schedule(event_handler, path=RAIZ_LOCAL_XML, recursive=True)
     
     observer.start()
-    print("Monitor de NF-e (PDF/XML com subpastas) iniciado no terminal.")
+    print("Monitor de NF-e rodando ativamente em segundo plano.")
     
     try:
         while True:
