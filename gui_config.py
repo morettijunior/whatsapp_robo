@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 import json
 import os
 import random
@@ -27,10 +27,11 @@ def carregar_config():
         "imap_host": "imap.hostinger.com",
         "imap_port": 993,
         "smtp_user": "financeiro@rondochassis.com.br",
-        "smtp_pass": "sua_senha_aqui"
+        "smtp_pass": "sua_senha_aqui",
+        "logo_banco": ""
     }
 
-def salvar_config(dsn, smtp_host, smtp_port, imap_host, imap_port, user, senha):
+def salvar_config(dsn, smtp_host, smtp_port, imap_host, imap_port, user, senha, logo_path):
     dados = {
         "db_dsn": dsn,
         "smtp_host": smtp_host,
@@ -38,7 +39,8 @@ def salvar_config(dsn, smtp_host, smtp_port, imap_host, imap_port, user, senha):
         "imap_host": imap_host,
         "imap_port": int(imap_port),
         "smtp_user": user,
-        "smtp_pass": senha
+        "smtp_pass": senha,
+        "logo_banco": logo_path
     }
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(dados, f, indent=4, ensure_ascii=False)
@@ -77,15 +79,62 @@ def resetar_senha_cliente_por_cnpj(doc_digitado):
     else:
         messagebox.showerror("Erro", "A senha foi gerada, mas houve uma falha ao enviar o e-mail SMTP.")
 
+def mostrar_notas_lancamento(parent):
+    """Exibe a janela pop-up com o release notes da versão 1.0.0"""
+    top = tk.Toplevel(parent)
+    top.title("Release Notes - Versão 1.0.0")
+    top.geometry("460x420")
+    top.minsize(400, 380)
+    
+    tk.Label(top, text="🚀 Bot Rondochassis - Versão 1.0.0", font=("Arial", 11, "bold")).pack(pady=(12, 5))
+    tk.Label(top, text="Data de Lançamento: Novembro de 2026", font=("Arial", 9, "italic"), fg="#555").pack(pady=(0, 10))
+
+    frame_txt = tk.Frame(top)
+    frame_txt.pack(fill="both", expand=True, padx=15, pady=5)
+
+    scrollbar = tk.Scrollbar(frame_txt)
+    scrollbar.pack(side="right", fill="y")
+
+    text_info = tk.Text(frame_txt, wrap="word", yscrollcommand=scrollbar.set, font=("Arial", 9), padx=8, pady=8)
+    text_info.pack(side="left", fill="both", expand=True)
+    scrollbar.config(command=text_info.yview)
+
+    changelog = (
+        "📌 PRINCIPAIS RECURSOS E MELHORIAS (v1.0.0):\n\n"
+        "• Unificação Financeira de 90 Dias:\n"
+        "  - Consolidação perfeita entre pedidos comuns, faturas e O.S. agrupadas.\n"
+        "  - Tratamento visual inteligente para remoção de linhas vazias/zeradas.\n\n"
+        "• Automação de Boleto & Pix via WhatsApp (Evolution API):\n"
+        "  - Emissão e envio automatizado de boletos bancários (Sicoob) integrados.\n"
+        "  - Inclusão dinâmica do Payload Pix Copia e Cole e QR Code direto no PDF.\n"
+        "  - Datas de emissão do documento sincronizadas com o ERP Firebird (TGA.FDB).\n\n"
+        "• Painel Administrativo Robusto:\n"
+        "  - Gestão de configurações de banco de dados, servidores SMTP/IMAP.\n"
+        "  - Ferramenta de reset manual de senha provisória via CNPJ/CPF.\n"
+        "  - Configuração customizada da logo bancária para os boletos PDF."
+    )
+
+    text_info.insert("1.0", changelog)
+    text_info.config(state="disabled")
+
+    tk.Button(top, text="Fechar", bg="#6c757d", fg="white", font=("Arial", 9, "bold"), command=top.destroy).pack(pady=10)
+
 def abrir_tela_config():
     config = carregar_config()
 
     root = tk.Tk()
-    root.title("Painel do Financeiro - Configurações e Reset")
-    root.geometry("500x520")
-    root.minsize(500, 520)
+    root.title("Whatsapp Robo Financeiro - v1.0.0")
+    root.geometry("500x650")
+    root.minsize(500, 650)
 
-    tk.Label(root, text="Painel Administrativo - Bot Rondochassis", font=("Arial", 12, "bold")).pack(pady=10)
+    # Topo com título e botão de release
+    header_frame = tk.Frame(root)
+    header_frame.pack(fill="x", padx=15, pady=10)
+
+    tk.Label(header_frame, text="Painel Administrativo - Bot Rondochassis", font=("Arial", 12, "bold")).pack(side="left")
+    
+    btn_release = tk.Button(header_frame, text="Versão 1.0.0 ℹ️", bg="#17a2b8", fg="white", font=("Arial", 8, "bold"), command=lambda: mostrar_notas_lancamento(root))
+    btn_release.pack(side="right")
 
     # Frame Configurações de Conexão e SMTP/IMAP
     frame_cfg = tk.LabelFrame(root, text=" Configurações de Servidor e E-mail ", padx=10, pady=10)
@@ -128,22 +177,9 @@ def abrir_tela_config():
     entry_pass.pack(fill="x", pady=2)
     entry_pass.insert(0, config.get("smtp_pass", ""))
 
-    def botao_salvar_click():
-        salvar_config(
-            entry_dsn.get(),
-            entry_smtp_host.get(),
-            entry_smtp_port.get(),
-            entry_imap_host.get(),
-            entry_imap_port.get(),
-            entry_user.get(),
-            entry_pass.get()
-        )
-
-    tk.Button(frame_cfg, text="Salvar Configurações", bg="#28a745", fg="white", font=("Arial", 9, "bold"), command=botao_salvar_click).pack(pady=5)
-
     # Frame Reset Manual de Senha
     frame_reset = tk.LabelFrame(root, text=" Reset Manual de Senha (Caso o cliente solicite) ", padx=10, pady=10)
-    frame_reset.pack(fill="x", padx=15, pady=10)
+    frame_reset.pack(fill="x", padx=15, pady=8)
 
     tk.Label(frame_reset, text="Digite o CNPJ ou CPF do Cliente:").pack(anchor="w")
     row_reset = tk.Frame(frame_reset)
@@ -160,6 +196,43 @@ def abrir_tela_config():
         resetar_senha_cliente_por_cnpj(doc)
 
     tk.Button(row_reset, text="Gerar e Enviar Nova Senha", bg="#007bff", fg="white", font=("Arial", 9, "bold"), command=botao_reset_click).pack(side="left")
+
+    # Frame Logo do Banco (Boleto)
+    frame_logo = tk.LabelFrame(root, text=" Configuração da Logo do Banco (Boleto PDF) ", padx=10, pady=10)
+    frame_logo.pack(fill="x", padx=15, pady=8)
+
+    tk.Label(frame_logo, text="Arquivo de Logo (Ex: 756.bmp):").pack(anchor="w")
+    row_logo = tk.Frame(frame_logo)
+    row_logo.pack(fill="x", pady=5)
+
+    entry_logo_path = tk.Entry(row_logo, width=35, font=("Arial", 9))
+    entry_logo_path.pack(side="left", padx=(0, 10))
+    entry_logo_path.insert(0, config.get("logo_banco", ""))
+
+    def procurar_logo():
+        caminho = filedialog.askopenfilename(
+            title="Selecionar Logo do Banco",
+            filetypes=[("Arquivos de Imagem", "*.bmp;*.png;*.jpg;*.jpeg"), ("Todos os arquivos", "*.*")]
+        )
+        if caminho:
+            entry_logo_path.delete(0, tk.END)
+            entry_logo_path.insert(0, caminho)
+
+    tk.Button(row_logo, text="Procurar...", font=("Arial", 9), command=procurar_logo).pack(side="left")
+
+    def botao_salvar_click():
+        salvar_config(
+            entry_dsn.get(),
+            entry_smtp_host.get(),
+            entry_smtp_port.get(),
+            entry_imap_host.get(),
+            entry_imap_port.get(),
+            entry_user.get(),
+            entry_pass.get(),
+            entry_logo_path.get()
+        )
+
+    tk.Button(root, text="Salvar Configurações", bg="#28a745", fg="white", font=("Arial", 10, "bold"), command=botao_salvar_click).pack(pady=10)
 
     root.mainloop()
 

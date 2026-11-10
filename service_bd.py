@@ -126,6 +126,36 @@ def verificar_senha_robo(codcfo, senha_digitada):
         conn.close()
 
 
+def _carregar_dados_fcfo(cursor, codcfo_limpo, item):
+    """Carrega dados cadastrais e de endereço da FCFO para o item"""
+    query_fcfo = """
+        SELECT NOME, EMAIL, FAX, CGCCFO, 
+               RUA, NUMERO, BAIRRO, CIDADE, CODETD, CEP, 
+               RUAPGTO, NUMEROPGTO, BAIRROPGTO, CIDADEPGTO, CODETDPGTO, CEPPGTO 
+        FROM FCFO 
+        WHERE CODCFO = ?
+    """
+    cursor.execute(query_fcfo, (codcfo_limpo,))
+    cliente = cursor.fetchone()
+    if cliente:
+        item["CLIENTE_NOME"] = cliente[0].strip() if cliente[0] else "CLIENTE NÃO IDENTIFICADO"
+        item["EMAIL"] = cliente[1].strip() if cliente[1] else ""
+        item["WHATSAPP"] = cliente[2].strip() if cliente[2] else ""
+        item["CLIENTE_DOC"] = cliente[3].strip() if cliente[3] else ""
+        item["CLIENTE_RUA"] = cliente[4].strip() if cliente[4] else ""
+        item["CLIENTE_NUMERO"] = cliente[5].strip() if cliente[5] else ""
+        item["CLIENTE_BAIRRO"] = cliente[6].strip() if cliente[6] else ""
+        item["CLIENTE_CIDADE"] = cliente[7].strip() if cliente[7] else ""
+        item["CLIENTE_ESTADO"] = cliente[8].strip() if cliente[8] else ""
+        item["CLIENTE_CEP"] = cliente[9].strip() if cliente[9] else ""
+        item["CLIENTE_RUAPGTO"] = cliente[10].strip() if cliente[10] else ""
+        item["CLIENTE_NUMEROPGTO"] = cliente[11].strip() if cliente[11] else ""
+        item["CLIENTE_BAIRROPGTO"] = cliente[12].strip() if cliente[12] else ""
+        item["CLIENTE_CIDADEPGTO"] = cliente[13].strip() if cliente[13] else ""
+        item["CLIENTE_ESTADOPGTO"] = cliente[14].strip() if cliente[14] else ""
+        item["CLIENTE_CEPPGTO"] = cliente[15].strip() if cliente[15] else ""
+
+
 # -------------------------------------------------------------------------
 # 1. BLOCO DE PEDIDOS COMUNS
 # -------------------------------------------------------------------------
@@ -155,7 +185,11 @@ def _consultar_pedidos_comuns(cursor, codcfo_limpo):
             ev.SERIE,
             ev.CHAVEACESSO,
             tnfe_ev.CHAVEACESSO,
-            os.NUMEROMOV
+            os.NUMEROMOV,
+            f.CODBARRABOLETO,
+            f.LINHADIGITAVELBOLETO,
+            f.QRCODEPIX,
+            f.BOL_NUMERO
         FROM FLAN f
         LEFT JOIN TMOV t ON f.IDMOV = t.IDMOV
         LEFT JOIN TNFE tnfe ON tnfe.IDMOV = t.IDMOV
@@ -194,7 +228,7 @@ def _consultar_pedidos_comuns(cursor, codcfo_limpo):
             num_mov, dt_emissao_tmov, valor_liq, placa_tmov, id_mov_relac, serie, chave_tmov, tnfe_chave,
             nfs_numfse, recibo_nfs,
             ev_num_mov, ev_placa, ev_relac, ev_serie, ev_chave, tnfe_ev_chave,
-            os_num_mov
+            os_num_mov, cod_barras, linha_dig, pix, bol_num
         ) = row
         
         if not id_mov:
@@ -265,21 +299,49 @@ def _consultar_pedidos_comuns(cursor, codcfo_limpo):
                 "DATA": data_str,
                 "OS": num_os,
                 "PEDIDO": num_pedido,
+                "NUMERO_PEDIDO": num_pedido,
                 "PLACA": placa,
                 "NOTA": numero_nota_fiscal,
                 "CHAVE_NFE": chave_nfe_val,
                 "RECIBO_NFSE": recibo_val,
                 "NUMERO_NFS_MUNICIPAL": num_nfs_municipal_val,
                 "VALOR_TOTAL": valor_total,
-                "PARCELAS": []
+                "PARCELAS": [],
+                "BOLETOS": []
             }
+            
+            # Carrega dados do cliente na FCFO
+            _carregar_dados_fcfo(cursor, codcfo_limpo, lancamentos[id_mov])
         
-        lancamentos[id_mov]["PARCELAS"].append({
-            "PARCELA": parcela if parcela else 1,
-            "VENCIMENTO": venc_str if 'venc_str' in locals() else "",
-            "VALOR": float(val_orig) if val_orig else 0.0,
-            "STATUS": "BAIXADO" if str(status_lan).strip().upper() == "B" else "ABERTO"
-        })
+        venc_parc_str = ""
+        if dt_venc:
+            v_partes = str(dt_venc).split()[0].split("-")
+            if len(v_partes) == 3:
+                venc_parc_str = f"{v_partes[2]}/{v_partes[1]}/{v_partes[0]}"
+
+        val_parcela = float(val_orig) if val_orig else 0.0
+        p_num = parcela if parcela else 1
+
+        if not any(p["PARCELA"] == p_num for p in lancamentos[id_mov]["PARCELAS"]):
+            lancamentos[id_mov]["PARCELAS"].append({
+                "PARCELA": p_num,
+                "VENCIMENTO": venc_parc_str,
+                "VALOR": val_parcela,
+                "STATUS": "BAIXADO" if str(status_lan).strip().upper() == "B" else "ABERTO"
+            })
+
+            # Popula o boleto correspondente diretamente com os dados da FLAN da query
+            lancamentos[id_mov]["BOLETOS"].append({
+                "PARCELA": p_num,
+                "NUMERO_DOCUMENTO": str(num_doc).strip() if num_doc else "DOC",
+                "VENCIMENTO": venc_parc_str,
+                "VALOR": val_parcela,
+                "BOL_NUMERO": bol_num.strip() if (bol_num and str(bol_num).strip() != "None") else "",
+                "CODBARRABOLETO": cod_barras.strip() if (cod_barras and str(cod_barras).strip() != "None") else "",
+                "LINHADIGITAVELBOLETO": linha_dig.strip() if (linha_dig and str(linha_dig).strip() != "None") else "",
+                "QRCODEPIX": pix.strip() if (pix and str(pix).strip() != "None") else "",
+                "DATA_EMISSAO": data_str,
+            })
 
     return list(lancamentos.values())
 
@@ -315,7 +377,11 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
             tnfe_ev.CHAVEACESSO,
             nfs_ev.NUMERONFSE,
             nfs_ev.RECIBO,
-            os.NUMEROMOV
+            os.NUMEROMOV,
+            f.CODBARRABOLETO,
+            f.LINHADIGITAVELBOLETO,
+            f.QRCODEPIX,
+            f.BOL_NUMERO
         FROM FLAN f
         LEFT JOIN FLAN orig ON orig.IDFAT = f.IDFATLAN AND orig.IDMOV IS NOT NULL
         LEFT JOIN FLAN ponte ON ponte.IDFAT = f.IDFATLAN AND ponte.IDMOV IS NULL
@@ -355,7 +421,6 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
     lancamentos = {}
     ids_lan_ja_processados = set()
     
-    # Dicionário auxiliar para capturar a O.S. e o Pedido principais por IDFATLAN (caso precisem ser herdados)
     contexto_fatura = {}
     for row in linhas:
         idfatlan = row[7]
@@ -375,7 +440,7 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
             num_mov, dt_emissao_tmov, valor_liq, placa_tmov, serie, chave_tmov, tnfe_chave,
             nfs_numfse, recibo_nfs,
             ev_num_mov, ev_placa, ev_serie, ev_chave, tnfe_ev_chave, ev_nfs_numfse, ev_recibo_nfs,
-            os_num_mov
+            os_num_mov, cod_barras, linha_dig, pix, bol_num
         ) = row
         
         if not idfatlan:
@@ -405,7 +470,6 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
             if not num_pedido and num_doc:
                 num_pedido = str(num_doc).split('/')[0].strip().lstrip("0")
             
-            # Se ainda estiver vazio, tenta herdar do contexto da fatura
             if not num_pedido and idfatlan:
                 num_pedido = contexto_fatura.get(f"{idfatlan}_ped", "")
 
@@ -429,6 +493,7 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
                 "DATA": data_str,
                 "OS": num_os,
                 "PEDIDO": num_pedido,
+                "NUMERO_PEDIDO": num_pedido,
                 "PLACA": placa,
                 "NFE_VAL": "",
                 "NFS_VAL": "",
@@ -437,10 +502,13 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
                 "NUMERO_NFS_MUNICIPAL": "",
                 "NOTA": "",
                 "VALOR_TOTAL": 0.0,
-                "PARCELAS": []
+                "PARCELAS": [],
+                "BOLETOS": []
             }
+            
+            # Carrega dados do cliente na FCFO
+            _carregar_dados_fcfo(cursor, codcfo_limpo, lancamentos[chave_agrupamento])
         
-        # Garante herança de O.S. caso o registro atual venha sem preenchimento na linha secundária
         if not lancamentos[chave_agrupamento]["OS"] and os_num_mov:
             lancamentos[chave_agrupamento]["OS"] = str(os_num_mov).strip().lstrip("0")
         elif not lancamentos[chave_agrupamento]["OS"] and idfatlan:
@@ -448,19 +516,20 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
 
         if not lancamentos[chave_agrupamento]["PEDIDO"] and num_pedido:
             lancamentos[chave_agrupamento]["PEDIDO"] = num_pedido
+            lancamentos[chave_agrupamento]["NUMERO_PEDIDO"] = num_pedido
         elif not lancamentos[chave_agrupamento]["PEDIDO"] and idfatlan:
-            lancamentos[chave_agrupamento]["PEDIDO"] = contexto_fatura.get(f"{idfatlan}_ped", "")
+            p_fat = contexto_fatura.get(f"{idfatlan}_ped", "")
+            lancamentos[chave_agrupamento]["PEDIDO"] = p_fat
+            lancamentos[chave_agrupamento]["NUMERO_PEDIDO"] = p_fat
 
         serie_limpa = str(serie).strip().upper() if serie else ""
         ev_serie_limpa = str(ev_serie).strip().upper() if ev_serie else ""
         
-        # Tratamento rigoroso para NFS municipal (evitando que o RPS 13496 substitua a nota correta)
         val_nfs_real = nfs_numfse or ev_nfs_numfse
         if val_nfs_real:
             lancamentos[chave_agrupamento]["NFS_VAL"] = str(val_nfs_real).strip().lstrip("0")
             lancamentos[chave_agrupamento]["NUMERO_NFS_MUNICIPAL"] = str(val_nfs_real).strip().lstrip("0")
         elif serie_limpa == "NFS" and num_mov:
-            # Se o documento da série NFS for a nota real
             lancamentos[chave_agrupamento]["NFS_VAL"] = str(num_mov).strip().lstrip("0")
             lancamentos[chave_agrupamento]["NUMERO_NFS_MUNICIPAL"] = str(num_mov).strip().lstrip("0")
 
@@ -490,7 +559,6 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
                 partes = doc_limpo.split('/')
                 if len(partes) >= 2:
                     lancamentos[chave_agrupamento]["NFE_VAL"] = partes[0].strip().lstrip("0")
-                    # Se a segunda parte após a barra for claramente a NFS (e não o RPS)
                     nfs_candidata = partes[1].strip().lstrip("0")
                     if nfs_candidata != lancamentos[chave_agrupamento]["PEDIDO"]:
                         lancamentos[chave_agrupamento]["NFS_VAL"] = nfs_candidata
@@ -511,12 +579,25 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
                     venc_parc_str = f"{v_partes[2]}/{v_partes[1]}/{v_partes[0]}"
 
             valor_parcela = float(val_orig) if val_orig else 0.0
+            p_num = parcela if parcela else 1
 
             lancamentos[chave_agrupamento]["PARCELAS"].append({
-                "PARCELA": parcela if parcela else 1,
+                "PARCELA": p_num,
                 "VENCIMENTO": venc_parc_str,
                 "VALOR": valor_parcela,
                 "STATUS": "BAIXADO" if str(status_lan).strip().upper() == "B" else "ABERTO"
+            })
+
+            lancamentos[chave_agrupamento]["BOLETOS"].append({
+                "PARCELA": p_num,
+                "NUMERO_DOCUMENTO": str(num_doc).strip() if num_doc else "DOC",
+                "VENCIMENTO": venc_parc_str,
+                "VALOR": valor_parcela,
+                "BOL_NUMERO": bol_num.strip() if (bol_num and str(bol_num).strip() != "None") else "",
+                "CODBARRABOLETO": cod_barras.strip() if (cod_barras and str(cod_barras).strip() != "None") else "",
+                "LINHADIGITAVELBOLETO": linha_dig.strip() if (linha_dig and str(linha_dig).strip() != "None") else "",
+                "QRCODEPIX": pix.strip() if (pix and str(pix).strip() != "None") else "",
+                "DATA_EMISSAO": data_str,
             })
 
     resultado_final = []
@@ -537,13 +618,13 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
     # --- PÓS-PROCESSAMENTO: Herança segura (apenas se a O.S. da linha estiver vazia) ---
     for i in range(len(resultado_final)):
         atual = resultado_final[i]
-        # Só herda se a O.S. atual estiver em branco ou traço (evita misturar O.S.s diferentes do mesmo caminhão no mesmo dia)
         if atual["OS"] in ("", "-"):
             for outro in resultado_final:
                 if outro["DATA"] == atual["DATA"] and outro["PLACA"] == atual["PLACA"] and outro != atual:
                     if outro["OS"] not in ("", "-"):
                         atual["OS"] = outro["OS"]
-                        atual["PEDIDO"] = outro["PEDIDO"]  # Herda o pedido correto da mesma O.S.
+                        atual["PEDIDO"] = outro["PEDIDO"]
+                        atual["NUMERO_PEDIDO"] = outro["NUMERO_PEDIDO"]
                     break
 
     return resultado_final

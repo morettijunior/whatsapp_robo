@@ -1,4 +1,5 @@
 import sys
+import datetime
 from pathlib import Path
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
@@ -34,24 +35,22 @@ def obter_caminho_logo(caminhos_config=None, nome_arquivo="756.bmp"):
     """
     Localiza o arquivo exato da logo do banco configurado na GUI ou busca nos diretórios padrão.
     """
-    # 1. Tenta buscar pelo caminho exato do arquivo configurado na GUI (LOGO_BANCO)
-    if caminhos_config and caminhos_config.get("LOGO_BANCO"):
-        caminho_customizado = Path(caminhos_config.get("LOGO_BANCO"))
-        if caminho_customizado.exists():
-            return str(caminho_customizado)
+    if caminhos_config:
+        caminho_customizado_str = caminhos_config.get("logo_banco") or caminhos_config.get("LOGO_BANCO")
+        if caminho_customizado_str:
+            caminho_customizado = Path(caminho_customizado_str)
+            if caminho_customizado.exists():
+                return str(caminho_customizado)
 
-    # 2. Tenta buscar no diretório temporário do PyInstaller (_MEIPASS)
     if hasattr(sys, '_MEIPASS'):
         caminho_exe = Path(sys._MEIPASS) / nome_arquivo
         if caminho_exe.exists():
             return str(caminho_exe)
 
-    # 3. Tenta buscar na mesma pasta do script principal
     caminho_local = Path(__file__).parent / nome_arquivo
     if caminho_local.exists():
         return str(caminho_local)
 
-    # 4. Fallback final para o diretório de trabalho atual
     caminho_atual = Path(nome_arquivo)
     if caminho_atual.exists():
         return str(caminho_atual)
@@ -80,6 +79,9 @@ def gerar_pdf_boleto(dados_pedido, pasta_destino, caminhos_config=None):
     cep = dados_pedido.get("CLIENTE_CEPPGTO") or dados_pedido.get("CLIENTE_CEP") or ""
     endereco_completo = f"{rua} {num} - {bairro}, {cidade} / {uf} - {cep}"
     
+    # Identificador seguro do número do pedido/O.S.
+    num_ped_ref = dados_pedido.get('NUMERO_PEDIDO') or dados_pedido.get('PEDIDO') or dados_pedido.get('OS') or 'DOC'
+    
     for boleto in dados_pedido.get("BOLETOS", []):
         parcela = boleto.get("PARCELA", 1)
         num_doc = boleto.get("NUMERO_DOCUMENTO", "DOC")
@@ -87,11 +89,16 @@ def gerar_pdf_boleto(dados_pedido, pasta_destino, caminhos_config=None):
         valor_bruto = boleto.get("VALOR", 0.0)
         valor_fmt = formatar_moeda(valor_bruto)
         
+        # Datas dinâmicas
+        data_doc_raw = boleto.get("DATA_EMISSAO") or dados_pedido.get("DATA")
+        data_doc = data_doc_raw if data_doc_raw else datetime.date.today().strftime("%d/%m/%Y")
+        data_proc = datetime.date.today().strftime("%d/%m/%Y")
+        
         bol_numero = boleto.get("BOL_NUMERO", "")
         linha_dig = boleto.get("LINHADIGITAVELBOLETO", "")
         pix = boleto.get("QRCODEPIX", "")
         
-        nome_arquivo = f"Boleto_{dados_pedido['NUMERO_PEDIDO']}_P{parcela}.pdf"
+        nome_arquivo = f"Boleto_{num_ped_ref}_P{parcela}.pdf"
         caminho_arquivo = caminho_saida / nome_arquivo
         
         doc = SimpleDocTemplate(
@@ -141,11 +148,11 @@ def gerar_pdf_boleto(dados_pedido, pasta_destino, caminhos_config=None):
                 "", ""
             ],
             [
-                Paragraph("Data do Documento<br/><b>11/09/2026</b>", style_lbl),
+                Paragraph(f"Data do Documento<br/><b>{data_doc}</b>", style_lbl),
                 Paragraph(f"Numero do Doc<br/><b>{num_doc}</b>", style_lbl),
                 Paragraph("Especie Doc.<br/><b>DM</b>", style_lbl),
                 Paragraph("Aceite<br/><b>N</b>", style_lbl),
-                Paragraph("Data do Processamento<br/><b>11/09/2026</b>", style_lbl),
+                Paragraph(f"Data do Processamento<br/><b>{data_proc}</b>", style_lbl),
                 Paragraph(f"Nosso Número<br/><b>{bol_numero}</b>", style_lbl)
             ],
             [
@@ -159,7 +166,7 @@ def gerar_pdf_boleto(dados_pedido, pasta_destino, caminhos_config=None):
             [
                 Paragraph(
                     "Instruções (Texto de responsabilidade do beneficiário.)<br/>"
-                    "TESTE — APOS O VENC. COBRAR MULTA DE 2,00% | JUROS DE 0,17% DIA<br/>"
+                    "APOS O VENC. COBRAR MULTA DE 2,00% | JUROS DE 0,17% DIA<br/>"
                     f"Parcela {parcela} de 1 &nbsp;|&nbsp; Pix Copia e Cole: <font size=5>{pix}</font>",
                     style_lbl
                 ),
@@ -249,11 +256,11 @@ def gerar_pdf_boleto(dados_pedido, pasta_destino, caminhos_config=None):
                 "", ""
             ],
             [
-                Paragraph("Data do Documento<br/><b>11/09/2026</b>", style_lbl), 
+                Paragraph(f"Data do Documento<br/><b>{data_doc}</b>", style_lbl), 
                 Paragraph(f"Número do Doc<br/><b>{num_doc}</b>", style_lbl), 
                 Paragraph("Espécie Doc.<br/><b>DM</b>", style_lbl), 
                 Paragraph("Aceite<br/><b>N</b>", style_lbl), 
-                Paragraph("Data do Processamento<br/><b>11/09/2026</b>", style_lbl), 
+                Paragraph(f"Data do Processamento<br/><b>{data_proc}</b>", style_lbl), 
                 Paragraph(f"Nosso Número<br/><b>{bol_numero}</b>", style_lbl)
             ],
             [

@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 from datetime import datetime
 from boleto import gerar_pdf_boleto  # Importa o script de boletos
@@ -10,6 +11,11 @@ import logging
 DIRETORIO_BASE_NFE_PDF = r"\\SERVIDOR\tga\Nfe\PDF"
 DIRETORIO_BASE_NFE_XML = r"\\SERVIDOR\tga\Nfe\XML"
 DIRETORIO_BASE_NFSE = r"\\SERVIDOR\tga\NFS-e\XML"
+
+def _obter_caminho_config_json():
+    docs_path = Path.home() / "Documents" / "RondochassisBot"
+    docs_path.mkdir(parents=True, exist_ok=True)
+    return docs_path / "config_sistema.json"
 
 def buscar_arquivos_pedido(pedido_selecionado, pasta_destino_temp="temp_docs"):
     """
@@ -23,6 +29,16 @@ def buscar_arquivos_pedido(pedido_selecionado, pasta_destino_temp="temp_docs"):
     
     # Cria uma pasta temporária local para agrupar os arquivos
     Path(pasta_destino_temp).mkdir(parents=True, exist_ok=True)
+    
+    # Carrega as configurações do sistema (incluindo o caminho personalizado da logo_banco)
+    config_file = _obter_caminho_config_json()
+    caminhos_config = {}
+    if config_file.exists():
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                caminhos_config = json.load(f)
+        except:
+            pass
     
     # -----------------------------------------------------------------
     # 1. LOCALIZAR NF-E (PDF e XML baseados na CHAVE DE ACESSO)
@@ -70,7 +86,6 @@ def buscar_arquivos_pedido(pedido_selecionado, pasta_destino_temp="temp_docs"):
     is_antigo = _verificar_data_anterior_nacional(data_emissao)
 
     if is_antigo:
-        # Padrão Antigo (Até 31/10/2026): Busca estritamente pelo número da NFS-e municipal (RPS)
         num_nfs_antiga = pedido_selecionado.get("NUMERO_NFS_MUNICIPAL", "").strip()
         
         if num_nfs_antiga and num_nfs_antiga != "-":
@@ -78,12 +93,10 @@ def buscar_arquivos_pedido(pedido_selecionado, pasta_destino_temp="temp_docs"):
             if os.path.exists(nfse_path) and nfse_path not in arquivos_para_enviar:
                 arquivos_para_enviar.append(nfse_path)
             else:
-                # Fallback de busca por nome caso o arquivo varie levemente
                 nfse_fallback = _encontrar_arquivo_por_nome(DIRETORIO_BASE_NFSE, f"{num_nfs_antiga}-nfse.pdf")
                 if nfse_fallback and nfse_fallback not in arquivos_para_enviar:
                     arquivos_para_enviar.append(nfse_fallback)
     else:
-        # Padrão Novo (A partir de 01/11/2026 - Emissor Nacional via Recibo)
         if recibo_nfse and recibo_nfse != "-":
             recibos_lista = [r.strip() for r in recibo_nfse.replace(",", " ").split() if r.strip()]
             for recibo in recibos_lista:
@@ -96,11 +109,11 @@ def buscar_arquivos_pedido(pedido_selecionado, pasta_destino_temp="temp_docs"):
                         arquivos_para_enviar.append(nfse_fallback)
 
     # -----------------------------------------------------------------
-    # 3. GERAR BOLETOS DO PEDIDO
+    # 3. GERAR BOLETOS DO PEDIDO (Com suporte a logo configurada)
     # -----------------------------------------------------------------
     boletos_dados = pedido_selecionado.get("BOLETOS", [])
     if boletos_dados:
-        caminhos_boletos = gerar_pdf_boleto(pedido_selecionado, pasta_destino_temp)
+        caminhos_boletos = gerar_pdf_boleto(pedido_selecionado, pasta_destino_temp, caminhos_config=caminhos_config)
         if caminhos_boletos:
             for b in caminhos_boletos:
                 if b not in arquivos_para_enviar:
