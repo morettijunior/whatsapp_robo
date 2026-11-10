@@ -7,6 +7,7 @@ import random
 import string
 import base64
 import time
+from pathlib import Path
 from dotenv import load_dotenv
 
 # Importa os serviços necessários
@@ -48,12 +49,19 @@ logging.info(f"Iniciando bot (Módulo Financeiro). EVOLUTION_URL={EVOLUTION_URL}
 # Dicionário para guardar o estado atual e dados temporários de cada cliente
 user_sessions = {}
 
-NUMEROS_IGNORADOS = {
-    "5566999847335",
-    "556634210400",
-    "5566999840793",
-    "5566999101124",
-}
+def carregar_numeros_ignorados():
+    """Lê dinamicamente os números ignorados configurados no painel administrativo"""
+    docs_path = Path.home() / "Documents" / "RondochassisBot"
+    config_file = docs_path / "config_sistema.json"
+    if config_file.exists():
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                dados = json.load(f)
+                str_nums = dados.get("numeros_ignorados", "")
+                return {n.strip() for n in str_nums.split(",") if n.strip()}
+        except:
+            pass
+    return set()
 
 def enviar_mensagem(number: str, text: str):
     """Função robusta para envio de mensagens via Evolution API com logs visíveis"""
@@ -139,12 +147,9 @@ async def webhook_handler(request: Request):
             numero_limpo = remote_jid.split("@")[0] if remote_jid else ""
             print(f"DEBUG - Número recebido limpo: '{numero_limpo}'")
             
-            # --- MODO DE TESTE ATIVO (APENAS NÚMERO AUTORIZADO) ---
-            NUMERO_AUTORIZADO_TESTE = "556634211496"
-            if numero_limpo != NUMERO_AUTORIZADO_TESTE:
-                return {"status": "ignored_test_mode"}
-
-            if numero_limpo in NUMEROS_IGNORADOS:
+            # --- VALIDAÇÃO DE NÚMEROS IGNORADOS (CONFIGURADO NA GUI) ---
+            numeros_ignorados = carregar_numeros_ignorados()
+            if numero_limpo in numeros_ignorados:
                 return {"status": "ignored_internal"}
 
             message_body = (data.get("message", {}).get("conversation") or 
@@ -207,7 +212,6 @@ async def webhook_handler(request: Request):
 
             # ==========================================
             # ETAPA 2: MENU FINANCEIRO PRINCIPAL
-            # (Retorna ao Menu Principal com 0)
             # ==========================================
             elif current_state == "menu_financeiro_principal":
                 if message_body == "0":
@@ -237,7 +241,6 @@ async def webhook_handler(request: Request):
 
             # ==========================================
             # ETAPA 3: SUBMENU FINANCEIRO
-            # (Retorna ao Menu Financeiro Principal com 0)
             # ==========================================
             elif current_state == "submenu_financeiro":
                 if message_body == "0":
@@ -267,7 +270,6 @@ async def webhook_handler(request: Request):
 
             # ==========================================
             # ETAPA 4: MENU DE ACESSO
-            # (Retorna ao Submenu Financeiro com 0)
             # ==========================================
             elif current_state == "menu_acesso":
                 if message_body == "0":
@@ -507,7 +509,6 @@ async def webhook_handler(request: Request):
 
             # ==========================================
             # ETAPA 5: MENU GESTÃO FINANCEIRA (LOGADO)
-            # (Retorna ao Submenu Financeiro com 0)
             # ==========================================
             elif current_state == "menu_gestao_logado":
                 if message_body == "0":
@@ -644,11 +645,10 @@ async def webhook_handler(request: Request):
                     enviar_mensagem(remote_jid, "Opção inválida. Digite 1, 2 ou 0 para voltar.")
 
             # ==========================================
-            # ETAPA 6: SELEÇÃO DE PEDIDO (BUSCA E ENVIO DE ARQUIVOS)
+            # ETAPA 6: SELEÇÃO DE PEDIDO
             # ==========================================
             elif current_state == "aguardando_selecao_pedido":
                 if message_body == "0":
-                    # Retorna corretamente para o menu gerencial logado
                     session["state"] = "menu_gestao_logado"
                     enviar_mensagem(
                         remote_jid,
@@ -674,7 +674,6 @@ async def webhook_handler(request: Request):
                             "Buscando notas, boletos e preparando o envio dos arquivos..."
                         )
                         
-                        # Chama a função unificada do arquivos.py
                         arquivos_para_enviar = buscar_arquivos_pedido(pedido_selecionado)
                         
                         if not arquivos_para_enviar:

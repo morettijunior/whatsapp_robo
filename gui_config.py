@@ -28,10 +28,11 @@ def carregar_config():
         "imap_port": 993,
         "smtp_user": "financeiro@rondochassis.com.br",
         "smtp_pass": "sua_senha_aqui",
-        "logo_banco": ""
+        "logo_banco": "",
+        "numeros_ignorados": "5566999847335, 556634210400, 5566999840793, 5566999101124"
     }
 
-def salvar_config(dsn, smtp_host, smtp_port, imap_host, imap_port, user, senha, logo_path):
+def salvar_config(dsn, smtp_host, smtp_port, imap_host, imap_port, user, senha, logo_path, numeros_ignorados):
     dados = {
         "db_dsn": dsn,
         "smtp_host": smtp_host,
@@ -40,7 +41,8 @@ def salvar_config(dsn, smtp_host, smtp_port, imap_host, imap_port, user, senha, 
         "imap_port": int(imap_port),
         "smtp_user": user,
         "smtp_pass": senha,
-        "logo_banco": logo_path
+        "logo_banco": logo_path,
+        "numeros_ignorados": numeros_ignorados
     }
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(dados, f, indent=4, ensure_ascii=False)
@@ -110,6 +112,7 @@ def mostrar_notas_lancamento(parent):
         "  - Datas de emissão do documento sincronizadas com o ERP Firebird (TGA.FDB).\n\n"
         "• Painel Administrativo Robusto:\n"
         "  - Gestão de configurações de banco de dados, servidores SMTP/IMAP.\n"
+        "  - Configuração dinâmica de números ignorados pelo bot via interface.\n"
         "  - Ferramenta de reset manual de senha provisória via CNPJ/CPF.\n"
         "  - Configuração customizada da logo bancária para os boletos PDF."
     )
@@ -124,8 +127,8 @@ def abrir_tela_config():
 
     root = tk.Tk()
     root.title("Whatsapp Robo Financeiro - v1.0.0")
-    root.geometry("500x650")
-    root.minsize(500, 650)
+    root.geometry("500x720")
+    root.minsize(500, 700)
 
     # Topo com título e botão de release
     header_frame = tk.Frame(root)
@@ -176,6 +179,14 @@ def abrir_tela_config():
     entry_pass = tk.Entry(frame_cfg, width=55, show="*")
     entry_pass.pack(fill="x", pady=2)
     entry_pass.insert(0, config.get("smtp_pass", ""))
+
+    # Frame Números Ignorados
+    frame_ign = tk.LabelFrame(root, text=" Números Ignorados pelo Bot (separados por vírgula) ", padx=10, pady=10)
+    frame_ign.pack(fill="x", padx=15, pady=8)
+
+    entry_ign = tk.Entry(frame_ign, width=55, font=("Arial", 9))
+    entry_ign.pack(fill="x", pady=2)
+    entry_ign.insert(0, config.get("numeros_ignorados", ""))
 
     # Frame Reset Manual de Senha
     frame_reset = tk.LabelFrame(root, text=" Reset Manual de Senha (Caso o cliente solicite) ", padx=10, pady=10)
@@ -229,7 +240,8 @@ def abrir_tela_config():
             entry_imap_port.get(),
             entry_user.get(),
             entry_pass.get(),
-            entry_logo_path.get()
+            entry_logo_path.get(),
+            entry_ign.get()
         )
 
     tk.Button(root, text="Salvar Configurações", bg="#28a745", fg="white", font=("Arial", 10, "bold"), command=botao_salvar_click).pack(pady=10)
