@@ -145,14 +145,20 @@ def _consultar_pedidos_comuns(cursor, codcfo_limpo):
             t.OB_NUMEROSERIE,
             t.IDMOVRELAC,
             t.SERIE,
+            t.CHAVEACESSO,
+            tnfe.CHAVEACESSO,
             nfs.NUMERONFSE,
+            nfs.RECIBO,
             ev.NUMEROMOV,
             ev.OB_NUMEROSERIE,
             ev.IDMOVRELAC,
             ev.SERIE,
+            ev.CHAVEACESSO,
+            tnfe_ev.CHAVEACESSO,
             os.NUMEROMOV
         FROM FLAN f
         LEFT JOIN TMOV t ON f.IDMOV = t.IDMOV
+        LEFT JOIN TNFE tnfe ON tnfe.IDMOV = t.IDMOV
         LEFT JOIN TNFEMUNICIPAL nfs ON f.IDMOV = nfs.IDMOV
         LEFT JOIN TMOV ev ON (
             CASE 
@@ -161,6 +167,7 @@ def _consultar_pedidos_comuns(cursor, codcfo_limpo):
                 ELSE t.IDMOV
             END = ev.IDMOV
         )
+        LEFT JOIN TNFE tnfe_ev ON tnfe_ev.IDMOV = ev.IDMOV
         LEFT JOIN TMOV os ON (
             CASE 
                 WHEN UPPER(TRIM(t.SERIE)) = 'EV' THEN t.IDMOVRELAC
@@ -184,9 +191,9 @@ def _consultar_pedidos_comuns(cursor, codcfo_limpo):
     for row in linhas:
         (
             id_mov, num_doc, dt_emissao_flan, dt_venc, val_orig, status_lan, parcela,
-            num_mov, dt_emissao_tmov, valor_liq, placa_tmov, id_mov_relac, serie,
-            nfs_numfse,
-            ev_num_mov, ev_placa, ev_relac, ev_serie,
+            num_mov, dt_emissao_tmov, valor_liq, placa_tmov, id_mov_relac, serie, chave_tmov, tnfe_chave,
+            nfs_numfse, recibo_nfs,
+            ev_num_mov, ev_placa, ev_relac, ev_serie, ev_chave, tnfe_ev_chave,
             os_num_mov
         ) = row
         
@@ -209,7 +216,6 @@ def _consultar_pedidos_comuns(cursor, codcfo_limpo):
             elif ev_placa and str(ev_placa).strip() and str(ev_placa).strip().upper() != "NONE":
                 placa = str(ev_placa).strip()
             
-            # Captura rigorosa da NF-e (Série 1 ou numeromov direto da série 1)
             numero_nota_fiscal = ""
             if serie_limpa == "1":
                 numero_nota_fiscal = str(num_mov).strip().lstrip("0") if num_mov else ""
@@ -218,9 +224,17 @@ def _consultar_pedidos_comuns(cursor, codcfo_limpo):
             elif serie_limpa == "NFS":
                 numero_nota_fiscal = str(nfs_numfse).strip() if nfs_numfse else (str(num_mov).strip().lstrip("0") if num_mov else "")
             elif not serie_limpa or serie_limpa == "EV":
-                # Se for movimento geral/evento, tenta pegar o num_mov se não for 005
                 if num_mov and serie_limpa != "005":
                     numero_nota_fiscal = str(num_mov).strip().lstrip("0")
+
+            chave_nfe_val = (
+                str(tnfe_chave).strip() if tnfe_chave and str(tnfe_chave).strip() != "" else
+                str(tnfe_ev_chave).strip() if tnfe_ev_chave and str(tnfe_ev_chave).strip() != "" else
+                str(chave_tmov).strip() if chave_tmov and str(chave_tmov).strip() != "" else
+                str(ev_chave).strip() if ev_chave and str(ev_chave).strip() != "" else ""
+            )
+            recibo_val = str(recibo_nfs).strip() if recibo_nfs else ""
+            num_nfs_municipal_val = str(nfs_numfse).strip().lstrip("0") if nfs_numfse else ""
 
             num_pedido = ""
             if ev_num_mov and ev_serie_limpa != "1":
@@ -253,6 +267,9 @@ def _consultar_pedidos_comuns(cursor, codcfo_limpo):
                 "PEDIDO": num_pedido,
                 "PLACA": placa,
                 "NOTA": numero_nota_fiscal,
+                "CHAVE_NFE": chave_nfe_val,
+                "RECIBO_NFSE": recibo_val,
+                "NUMERO_NFS_MUNICIPAL": num_nfs_municipal_val,
                 "VALOR_TOTAL": valor_total,
                 "PARCELAS": []
             }
@@ -287,11 +304,17 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
             t.VALORLIQUIDO,
             t.OB_NUMEROSERIE,
             t.SERIE,
+            t.CHAVEACESSO,
+            tnfe.CHAVEACESSO,
             nfs.NUMERONFSE,
+            nfs.RECIBO,
             ev.NUMEROMOV,
             ev.OB_NUMEROSERIE,
             ev.SERIE,
+            ev.CHAVEACESSO,
+            tnfe_ev.CHAVEACESSO,
             nfs_ev.NUMERONFSE,
+            nfs_ev.RECIBO,
             os.NUMEROMOV
         FROM FLAN f
         LEFT JOIN FLAN orig ON orig.IDFAT = f.IDFATLAN AND orig.IDMOV IS NOT NULL
@@ -299,6 +322,7 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
         LEFT JOIN FLAN orig_via_ponte ON orig_via_ponte.IDFAT = ponte.IDFATLAN AND orig_via_ponte.IDMOV IS NOT NULL
         
         LEFT JOIN TMOV t ON t.IDMOV = COALESCE(orig.IDMOV, orig_via_ponte.IDMOV)
+        LEFT JOIN TNFE tnfe ON tnfe.IDMOV = t.IDMOV
         LEFT JOIN TNFEMUNICIPAL nfs ON nfs.IDMOV = t.IDMOV
         LEFT JOIN TMOV ev ON (
             CASE 
@@ -307,6 +331,7 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
                 ELSE t.IDMOV
             END = ev.IDMOV
         )
+        LEFT JOIN TNFE tnfe_ev ON tnfe_ev.IDMOV = ev.IDMOV
         LEFT JOIN TNFEMUNICIPAL nfs_ev ON nfs_ev.IDMOV = ev.IDMOV
         LEFT JOIN TMOV os ON (
             CASE 
@@ -334,9 +359,9 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
         (
             id_lan, num_doc, dt_emissao_flan, dt_venc, val_orig, status_lan, parcela,
             idfatlan, id_mov_origem,
-            num_mov, dt_emissao_tmov, valor_liq, placa_tmov, serie,
-            nfs_numfse,
-            ev_num_mov, ev_placa, ev_serie, ev_nfs_numfse,
+            num_mov, dt_emissao_tmov, valor_liq, placa_tmov, serie, chave_tmov, tnfe_chave,
+            nfs_numfse, recibo_nfs,
+            ev_num_mov, ev_placa, ev_serie, ev_chave, tnfe_ev_chave, ev_nfs_numfse, ev_recibo_nfs,
             os_num_mov
         ) = row
         
@@ -388,6 +413,9 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
                 "PLACA": placa,
                 "NFE_VAL": "",
                 "NFS_VAL": "",
+                "CHAVE_NFE": "",
+                "RECIBO_NFSE": "",
+                "NUMERO_NFS_MUNICIPAL": "",
                 "NOTA": "",
                 "VALOR_TOTAL": 0.0,
                 "PARCELAS": []
@@ -396,19 +424,30 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
         serie_limpa = str(serie).strip().upper() if serie else ""
         ev_serie_limpa = str(ev_serie).strip().upper() if ev_serie else ""
         
-        # Captura NFS (Serviço)
-        if nfs_numfse or serie_limpa == "NFS" or ev_serie_limpa == "NFS":
+        if nfs_numfse or ev_nfs_numfse or serie_limpa == "NFS" or ev_serie_limpa == "NFS":
             val_nfs = nfs_numfse or ev_nfs_numfse or (num_mov if serie_limpa == "NFS" else ev_num_mov)
             if val_nfs:
                 lancamentos[chave_agrupamento]["NFS_VAL"] = str(val_nfs).strip().lstrip("0")
+                lancamentos[chave_agrupamento]["NUMERO_NFS_MUNICIPAL"] = str(val_nfs).strip().lstrip("0")
+            rec_val = recibo_nfs or ev_recibo_nfs
+            if rec_val:
+                lancamentos[chave_agrupamento]["RECIBO_NFSE"] = str(rec_val).strip()
                 
-        # Captura NFE estritamente da Série 1
         if serie_limpa == "1" and num_mov:
             lancamentos[chave_agrupamento]["NFE_VAL"] = str(num_mov).strip().lstrip("0")
         elif ev_serie_limpa == "1" and ev_num_mov:
             lancamentos[chave_agrupamento]["NFE_VAL"] = str(ev_num_mov).strip().lstrip("0")
         elif not lancamentos[chave_agrupamento]["NFE_VAL"] and num_mov and serie_limpa != "005":
             lancamentos[chave_agrupamento]["NFE_VAL"] = str(num_mov).strip().lstrip("0")
+
+        current_chave = (
+            str(tnfe_chave).strip() if tnfe_chave and str(tnfe_chave).strip() != "" else
+            str(tnfe_ev_chave).strip() if tnfe_ev_chave and str(tnfe_ev_chave).strip() != "" else
+            str(chave_tmov).strip() if chave_tmov and str(chave_tmov).strip() != "" else
+            str(ev_chave).strip() if ev_chave and str(ev_chave).strip() != "" else ""
+        )
+        if current_chave and not lancamentos[chave_agrupamento]["CHAVE_NFE"]:
+            lancamentos[chave_agrupamento]["CHAVE_NFE"] = current_chave
 
         if not lancamentos[chave_agrupamento]["NFE_VAL"] and not lancamentos[chave_agrupamento]["NFS_VAL"] and num_doc:
             doc_limpo = str(num_doc).strip()
@@ -417,6 +456,7 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
                 if len(partes) >= 2:
                     lancamentos[chave_agrupamento]["NFE_VAL"] = partes[0].strip().lstrip("0")
                     lancamentos[chave_agrupamento]["NFS_VAL"] = partes[1].strip().lstrip("0")
+                    lancamentos[chave_agrupamento]["NUMERO_NFS_MUNICIPAL"] = partes[1].strip().lstrip("0")
             else:
                 lancamentos[chave_agrupamento]["NFE_VAL"] = doc_limpo.lstrip("0")
 
