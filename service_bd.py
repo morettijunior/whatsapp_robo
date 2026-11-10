@@ -355,6 +355,19 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
     lancamentos = {}
     ids_lan_ja_processados = set()
     
+    # Dicionário auxiliar para capturar a O.S. e o Pedido principais por IDFATLAN (caso precisem ser herdados)
+    contexto_fatura = {}
+    for row in linhas:
+        idfatlan = row[7]
+        os_val = row[25]
+        t_num = row[9]
+        t_serie = str(row[13]).strip().upper() if row[13] else ""
+        if idfatlan:
+            if os_val and not contexto_fatura.get(f"{idfatlan}_os"):
+                contexto_fatura[f"{idfatlan}_os"] = str(os_val).strip().lstrip("0")
+            if t_num and t_serie not in ("1", "NFS") and not contexto_fatura.get(f"{idfatlan}_ped"):
+                contexto_fatura[f"{idfatlan}_ped"] = str(t_num).strip().lstrip("0")
+
     for row in linhas:
         (
             id_lan, num_doc, dt_emissao_flan, dt_venc, val_orig, status_lan, parcela,
@@ -391,10 +404,16 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
             
             if not num_pedido and num_doc:
                 num_pedido = str(num_doc).split('/')[0].strip().lstrip("0")
+            
+            # Se ainda estiver vazio, tenta herdar do contexto da fatura
+            if not num_pedido and idfatlan:
+                num_pedido = contexto_fatura.get(f"{idfatlan}_ped", "")
 
             num_os = ""
             if os_num_mov:
                 num_os = str(os_num_mov).strip().lstrip("0")
+            elif idfatlan:
+                num_os = contexto_fatura.get(f"{idfatlan}_os", "")
 
             data_str = ""
             if dt_emissao_tmov:
@@ -421,23 +440,39 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
                 "PARCELAS": []
             }
         
+        # Garante herança de O.S. caso o registro atual venha sem preenchimento na linha secundária
+        if not lancamentos[chave_agrupamento]["OS"] and os_num_mov:
+            lancamentos[chave_agrupamento]["OS"] = str(os_num_mov).strip().lstrip("0")
+        elif not lancamentos[chave_agrupamento]["OS"] and idfatlan:
+            lancamentos[chave_agrupamento]["OS"] = contexto_fatura.get(f"{idfatlan}_os", "")
+
+        if not lancamentos[chave_agrupamento]["PEDIDO"] and num_pedido:
+            lancamentos[chave_agrupamento]["PEDIDO"] = num_pedido
+        elif not lancamentos[chave_agrupamento]["PEDIDO"] and idfatlan:
+            lancamentos[chave_agrupamento]["PEDIDO"] = contexto_fatura.get(f"{idfatlan}_ped", "")
+
         serie_limpa = str(serie).strip().upper() if serie else ""
         ev_serie_limpa = str(ev_serie).strip().upper() if ev_serie else ""
         
-        if nfs_numfse or ev_nfs_numfse or serie_limpa == "NFS" or ev_serie_limpa == "NFS":
-            val_nfs = nfs_numfse or ev_nfs_numfse or (num_mov if serie_limpa == "NFS" else ev_num_mov)
-            if val_nfs:
-                lancamentos[chave_agrupamento]["NFS_VAL"] = str(val_nfs).strip().lstrip("0")
-                lancamentos[chave_agrupamento]["NUMERO_NFS_MUNICIPAL"] = str(val_nfs).strip().lstrip("0")
-            rec_val = recibo_nfs or ev_recibo_nfs
-            if rec_val:
-                lancamentos[chave_agrupamento]["RECIBO_NFSE"] = str(rec_val).strip()
+        # Tratamento rigoroso para NFS municipal (evitando que o RPS 13496 substitua a nota correta)
+        val_nfs_real = nfs_numfse or ev_nfs_numfse
+        if val_nfs_real:
+            lancamentos[chave_agrupamento]["NFS_VAL"] = str(val_nfs_real).strip().lstrip("0")
+            lancamentos[chave_agrupamento]["NUMERO_NFS_MUNICIPAL"] = str(val_nfs_real).strip().lstrip("0")
+        elif serie_limpa == "NFS" and num_mov:
+            # Se o documento da série NFS for a nota real
+            lancamentos[chave_agrupamento]["NFS_VAL"] = str(num_mov).strip().lstrip("0")
+            lancamentos[chave_agrupamento]["NUMERO_NFS_MUNICIPAL"] = str(num_mov).strip().lstrip("0")
+
+        rec_val = recibo_nfs or ev_recibo_nfs
+        if rec_val:
+            lancamentos[chave_agrupamento]["RECIBO_NFSE"] = str(rec_val).strip()
                 
         if serie_limpa == "1" and num_mov:
             lancamentos[chave_agrupamento]["NFE_VAL"] = str(num_mov).strip().lstrip("0")
         elif ev_serie_limpa == "1" and ev_num_mov:
             lancamentos[chave_agrupamento]["NFE_VAL"] = str(ev_num_mov).strip().lstrip("0")
-        elif not lancamentos[chave_agrupamento]["NFE_VAL"] and num_mov and serie_limpa != "005":
+        elif not lancamentos[chave_agrupamento]["NFE_VAL"] and num_mov and serie_limpa not in ("005", "NFS"):
             lancamentos[chave_agrupamento]["NFE_VAL"] = str(num_mov).strip().lstrip("0")
 
         current_chave = (
@@ -455,10 +490,16 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
                 partes = doc_limpo.split('/')
                 if len(partes) >= 2:
                     lancamentos[chave_agrupamento]["NFE_VAL"] = partes[0].strip().lstrip("0")
-                    lancamentos[chave_agrupamento]["NFS_VAL"] = partes[1].strip().lstrip("0")
-                    lancamentos[chave_agrupamento]["NUMERO_NFS_MUNICIPAL"] = partes[1].strip().lstrip("0")
+                    # Se a segunda parte após a barra for claramente a NFS (e não o RPS)
+                    nfs_candidata = partes[1].strip().lstrip("0")
+                    if nfs_candidata != lancamentos[chave_agrupamento]["PEDIDO"]:
+                        lancamentos[chave_agrupamento]["NFS_VAL"] = nfs_candidata
+                        lancamentos[chave_agrupamento]["NUMERO_NFS_MUNICIPAL"] = nfs_candidata
             else:
-                lancamentos[chave_agrupamento]["NFE_VAL"] = doc_limpo.lstrip("0")
+                if serie_limpa == "NFS":
+                    lancamentos[chave_agrupamento]["NFS_VAL"] = doc_limpo.lstrip("0")
+                else:
+                    lancamentos[chave_agrupamento]["NFE_VAL"] = doc_limpo.lstrip("0")
 
         if id_lan not in ids_lan_ja_processados:
             ids_lan_ja_processados.add(id_lan)
@@ -492,6 +533,18 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
         item["NOTA"] = "  ".join(partes_nota) if partes_nota else "-"
         item["VALOR_TOTAL"] = sum(p["VALOR"] for p in item["PARCELAS"])
         resultado_final.append(item)
+
+    # --- PÓS-PROCESSAMENTO: Herança segura (apenas se a O.S. da linha estiver vazia) ---
+    for i in range(len(resultado_final)):
+        atual = resultado_final[i]
+        # Só herda se a O.S. atual estiver em branco ou traço (evita misturar O.S.s diferentes do mesmo caminhão no mesmo dia)
+        if atual["OS"] in ("", "-"):
+            for outro in resultado_final:
+                if outro["DATA"] == atual["DATA"] and outro["PLACA"] == atual["PLACA"] and outro != atual:
+                    if outro["OS"] not in ("", "-"):
+                        atual["OS"] = outro["OS"]
+                        atual["PEDIDO"] = outro["PEDIDO"]  # Herda o pedido correto da mesma O.S.
+                    break
 
     return resultado_final
 
