@@ -10,3 +10,4 @@ venv/
 config_sistema.json
 criar_tabela_robo.py
 temp_docs/
+*.spec

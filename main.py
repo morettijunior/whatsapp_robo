@@ -706,4 +706,17 @@ async def webhook_handler(request: Request):
         return {"status": "error", "detail": str(e)}
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=PORT, reload=False)
+    # Corrige o problema do sys.stdout/sys.stderr nulos em aplicativos com --noconsole
+    import sys
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w")
+
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=PORT, 
+        reload=False, 
+        log_config=None # Desativa o formatador de console padrão do Uvicorn que causa o erro
+    )
