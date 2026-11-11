@@ -82,14 +82,14 @@ def resetar_senha_cliente_por_cnpj(doc_digitado):
         messagebox.showerror("Erro", "A senha foi gerada, mas houve uma falha ao enviar o e-mail SMTP.")
 
 def mostrar_notas_lancamento(parent):
-    """Exibe a janela pop-up com o release notes da versão 1.0.0"""
+    """Exibe a janela pop-up com o release notes da versão 1.0.1"""
     top = tk.Toplevel(parent)
-    top.title("Release Notes - Versão 1.0.0")
-    top.geometry("460x420")
-    top.minsize(400, 380)
+    top.title("Release Notes - Versão 1.0.1")
+    top.geometry("480x450")
+    top.minsize(420, 400)
     
-    tk.Label(top, text="🚀 Bot Rondochassis - Versão 1.0.0", font=("Arial", 11, "bold")).pack(pady=(12, 5))
-    tk.Label(top, text="Data de Lançamento: Novembro de 2026", font=("Arial", 9, "italic"), fg="#555").pack(pady=(0, 10))
+    tk.Label(top, text="🚀 Bot Rondochassis - Versão 1.0.1", font=("Arial", 11, "bold")).pack(pady=(12, 5))
+    tk.Label(top, text="Data de Atualização: Novembro de 2026", font=("Arial", 9, "italic"), fg="#555").pack(pady=(0, 10))
 
     frame_txt = tk.Frame(top)
     frame_txt.pack(fill="both", expand=True, padx=15, pady=5)
@@ -102,19 +102,21 @@ def mostrar_notas_lancamento(parent):
     scrollbar.config(command=text_info.yview)
 
     changelog = (
-        "📌 PRINCIPAIS RECURSOS E MELHORIAS (v1.0.0):\n\n"
-        "• Unificação Financeira de 90 Dias:\n"
-        "  - Consolidação perfeita entre pedidos comuns, faturas e O.S. agrupadas.\n"
-        "  - Tratamento visual inteligente para remoção de linhas vazias/zeradas.\n\n"
-        "• Automação de Boleto & Pix via WhatsApp (Evolution API):\n"
-        "  - Emissão e envio automatizado de boletos bancários (Sicoob) integrados.\n"
-        "  - Inclusão dinâmica do Payload Pix Copia e Cole e QR Code direto no PDF.\n"
-        "  - Datas de emissão do documento sincronizadas com o ERP Firebird (TGA.FDB).\n\n"
-        "• Painel Administrativo Robusto:\n"
-        "  - Gestão de configurações de banco de dados, servidores SMTP/IMAP.\n"
-        "  - Configuração dinâmica de números ignorados pelo bot via interface.\n"
-        "  - Ferramenta de reset manual de senha provisória via CNPJ/CPF.\n"
-        "  - Configuração customizada da logo bancária para os boletos PDF."
+        "📌 NOVIDADES E CORREÇÕES (v1.0.1):\n\n"
+        "• Reestruturação do Menu Principal (WhatsApp):\n"
+        "  - Menu principal simplificado de 4 opções direcionadas.\n"
+        "  - Eliminação da confusão anterior entre Contas a Pagar/Receber.\n"
+        "  - Redirecionamento direto para Atendentes (Financeiro, Vendas, Oficina).\n"
+        "  - Agrupamento do fluxo de Login/Senhas/Boletos no submenu de Gestão Financeira.\n\n"
+        "• Correções de Comunicação & Webhook:\n"
+        "  - Tratamento do esquema de URL HTTP (http://) no carregamento de variáveis .env.\n"
+        "  - Estabilização da rota do webhook para conexões via IP / Docker (host.docker.internal).\n"
+        "  - Tratamento aprimorado de eventos do WhatsApp para evitar respostas sem texto (no_text).\n\n"
+        "--------------------------------------------------\n"
+        "📌 RECURSOS DA VERSÃO 1.0.0:\n\n"
+        "• Unificação Financeira de 90 Dias (ERP Firebird / TGA.FDB).\n"
+        "• Automação de Boleto & Pix via WhatsApp (Sicoob / Evolution API).\n"
+        "• Painel Administrativo em Tkinter para reset manual de senhas e configurações de servidor."
     )
 
     text_info.insert("1.0", changelog)
@@ -126,7 +128,7 @@ def abrir_tela_config():
     config = carregar_config()
 
     root = tk.Tk()
-    root.title("Whatsapp Robo Financeiro - v1.0.0")
+    root.title("Whatsapp Robo Financeiro - v1.0.1")
     root.geometry("500x720")
     root.minsize(500, 700)
 
@@ -136,7 +138,7 @@ def abrir_tela_config():
 
     tk.Label(header_frame, text="Painel Administrativo - Bot Rondochassis", font=("Arial", 12, "bold")).pack(side="left")
     
-    btn_release = tk.Button(header_frame, text="Versão 1.0.0 ℹ️", bg="#17a2b8", fg="white", font=("Arial", 8, "bold"), command=lambda: mostrar_notas_lancamento(root))
+    btn_release = tk.Button(header_frame, text="Versão 1.0.1 ℹ️", bg="#17a2b8", fg="white", font=("Arial", 8, "bold"), command=lambda: mostrar_notas_lancamento(root))
     btn_release.pack(side="right")
 
     # Frame Configurações de Conexão e SMTP/IMAP

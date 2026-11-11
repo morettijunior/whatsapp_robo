@@ -1,722 +1,418 @@
-from fastapi import FastAPI, Request
-import requests
 import os
+import sys
 import logging
-import uvicorn
-import random
-import string
+import json
+import pathlib
 import base64
-import time
-from pathlib import Path
+import re
+import uvicorn
+from fastapi import FastAPI, Request, Response
+from pydantic import BaseModel
+import requests
 from dotenv import load_dotenv
 
-# Importa os serviços necessários
-from service_bd import (
-    buscar_cliente_por_documento, 
-    salvar_ou_atualizar_senha_robo, 
-    verificar_senha_robo,
-    consultar_relatorio_pedidos_90_dias,
-    _obter_conexao_bd,
-    _consultar_pedidos_comuns,
-    _consultar_pedidos_agrupados
-)
-from service_email import enviar_email_senha_provisoria
-from service_pdf import gerar_pdf_relatorio_90_dias
+# --- IMPORTE DOS MÓDULOS INTERNOS DO SISTEMA ---
+try:
+    import service_bd
+except ImportError:
+    service_bd = None
+    logging.warning("Módulo 'service_bd' não encontrado na pasta física.")
 
-# Importa a função centralizada de busca e geração de arquivos
-from arquivos import buscar_arquivos_pedido
+try:
+    import boleto
+except ImportError:
+    boleto = None
+    logging.warning("Módulo 'boleto' não encontrado na pasta física.")
 
-# Configuração do Arquivo de Log na mesma pasta do executável
-log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.log")
+# --- CORREÇÃO PARA AMBIENTE SEM CONSOLE (--noconsole) ---
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w")
+
+# --- CONFIGURAÇÃO DE LOGS ---
 logging.basicConfig(
-    filename=log_path,
+    filename="bot.log",
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    encoding="utf-8"
+    format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-load_dotenv()
+# --- CARREGAR VARIÁVEIS DE AMBIENTE (.env) ---
+caminho_env = pathlib.Path(__file__).parent / ".env"
+load_dotenv(dotenv_path=caminho_env)
+
+EVOLUTION_URL = os.getenv("EVOLUTION_URL", "http://localhost:8080")
+INSTANCE_NAME = os.getenv("INSTANCE_NAME", "rondochassis")
+API_KEY = os.getenv("API_KEY", "")
+PORT = int(os.getenv("PORT", 5000))
 
 app = FastAPI()
 
-EVOLUTION_URL = os.getenv("EVOLUTION_URL")
-INSTANCE_NAME = os.getenv("INSTANCE_NAME")
-API_KEY = os.getenv("API_KEY")
-PORT = int(os.getenv("PORT", 5000))
+# Dicionário de sessão e estados em memória por número de WhatsApp
+user_states = {}
 
-logging.info(f"Iniciando bot (Módulo Financeiro). EVOLUTION_URL={EVOLUTION_URL}, INSTANCE={INSTANCE_NAME}")
+class WebhookPayload(BaseModel):
+    event: str = None
+    instance: str = None
+    data: dict = {}
 
-# Dicionário para guardar o estado atual e dados temporários de cada cliente
-user_sessions = {}
+def limpar_numero(numero_remoto: str) -> str:
+    """Remove sufixos de JID do WhatsApp e retorna o número limpo."""
+    return numero_remoto.split("@")[0].split(":")[0]
 
-def carregar_numeros_ignorados():
-    """Lê dinamicamente os números ignorados configurados no painel administrativo"""
-    docs_path = Path.home() / "Documents" / "RondochassisBot"
-    config_file = docs_path / "config_sistema.json"
-    if config_file.exists():
-        try:
-            with open(config_file, "r", encoding="utf-8") as f:
-                dados = json.load(f)
-                str_nums = dados.get("numeros_ignorados", "")
-                return {n.strip() for n in str_nums.split(",") if n.strip()}
-        except:
-            pass
-    return set()
+def apenas_numeros(texto: str) -> str:
+    """Remove pontuações e mantém apenas dígitos (para CPF/CNPJ)."""
+    return re.sub(r'\D', '', texto)
 
-def enviar_mensagem(number: str, text: str):
-    """Função robusta para envio de mensagens via Evolution API com logs visíveis"""
+def enviar_mensagem_whatsapp(numero: str, texto: str):
+    """Envia mensagem de texto via Evolution API."""
     url = f"{EVOLUTION_URL}/message/sendText/{INSTANCE_NAME}"
     headers = {
-        "Content-Type": "application/json",
-        "apikey": API_KEY
+        "apikey": API_KEY,
+        "Content-Type": "application/json"
     }
     payload = {
-        "number": number,
-        "text": text,
-        "linkPreview": False
+        "number": numero,
+        "text": texto
     }
     try:
-        print(f"DEBUG - Tentando enviar mensagem para {number} via instância '{INSTANCE_NAME}'...")
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
-        print(f"DEBUG - Resposta da Evolution (Enviar): Status {response.status_code} - {response.text}")
-        logging.info(f"Resposta da Evolution (Enviar): Status {response.status_code} - {response.text}")
+        response = requests.post(url, json=payload, headers=headers, timeout=12)
+        logging.info(f"Envio de mensagem para {numero} | Status: {response.status_code}")
         return response.json()
     except Exception as e:
-        print(f"ERRO ao enviar mensagem para a Evolution API: {e}")
-        logging.error(f"Erro ao enviar mensagem para a Evolution API: {e}")
+        logging.error(f"ERRO ao enviar mensagem para a Evolution API: {e}")
+        return None
 
-def enviar_documento_evolution(number: str, caminho_arquivo: str, nome_arquivo: str):
-    """Envia qualquer arquivo (PDF, XML, etc.) através da Evolution API"""
+def enviar_pdf_whatsapp(numero: str, caminho_pdf: str, filename: str = "documento.pdf", caption: str = ""):
+    """Envia documento PDF codificado em Base64 via Evolution API."""
     url = f"{EVOLUTION_URL}/message/sendMedia/{INSTANCE_NAME}"
     headers = {
-        "Content-Type": "application/json",
-        "apikey": API_KEY
+        "apikey": API_KEY,
+        "Content-Type": "application/json"
     }
-    
     try:
-        with open(caminho_arquivo, "rb") as f:
-            file_bytes = f.read()
-            file_base64 = base64.b64encode(file_bytes).decode("utf-8")
-            
-        mimetype = "application/pdf" if nome_arquivo.lower().endswith(".pdf") else "application/xml"
-            
+        if not os.path.exists(caminho_pdf):
+            logging.error(f"Arquivo PDF não encontrado: {caminho_pdf}")
+            return None
+
+        with open(caminho_pdf, "rb") as f:
+            pdf_base64 = base64.b64encode(f.read()).decode("utf-8")
+
         payload = {
-            "number": number,
+            "number": numero,
+            "media": pdf_base64,
             "mediatype": "document",
-            "mimetype": mimetype,
-            "fileName": nome_arquivo,
-            "media": file_base64,
-            "caption": f"📄 Segue o documento referente ao seu pedido: {nome_arquivo}"
+            "fileName": filename,
+            "caption": caption
         }
-        
         response = requests.post(url, json=payload, headers=headers, timeout=30)
-        logging.info(f"Resposta da Evolution (Enviar Arquivo): Status {response.status_code} - {response.text}")
+        logging.info(f"Envio de PDF para {numero} | Status: {response.status_code}")
         return response.json()
     except Exception as e:
-        logging.error(f"Erro ao enviar arquivo via Evolution API: {e}")
+        logging.error(f"ERRO ao enviar PDF para a Evolution API: {e}")
+        return None
 
-def mascarar_email(email):
-    if "@" not in email:
-        return "***@***.com"
-    partes = email.split("@")
-    usuario = partes[0]
-    dominio = partes[1]
-    if len(usuario) > 3:
-        usuario_mascarado = usuario[:3] + "****"
-    else:
-        usuario_mascarado = usuario + "****"
-    return f"{usuario_mascarado}@{dominio}"
+def montar_texto_menu_principal() -> str:
+    return (
+        "Olá! Seja bem-vindo à *Rondochassis*. Como podemos ajudar você hoje?\n\n"
+        "1️⃣ - Financeiro - Falar com Atendente\n"
+        "2️⃣ - Financeiro - Acesso ao Sistema de Notas e Boletos\n"
+        "3️⃣ - Vendas - Falar com Atendente\n"
+        "4️⃣ - Oficina - Falar com Atendente\n\n"
+        "Por favor, digite o número da opção desejada:"
+    )
 
-def gerar_senha_aleatoria(tamanho=6):
-    caracteres = string.ascii_uppercase + string.digits
-    return "".join(random.choice(caracteres) for _ in range(tamanho))
+def montar_texto_submenu_financeiro() -> str:
+    return (
+        "📊 *Gestão Financeira - Notas e Boletos*\n\n"
+        "Identifique-se para continuar:\n"
+        "1️⃣ - Fazer Login (Consultar Notas e Boletos)\n"
+        "2️⃣ - Solicitar Senha\n"
+        "3️⃣ - Alterar Senha\n"
+        "0️⃣ - Voltar ao menu principal\n\n"
+        "Digite a opção desejada:"
+    )
 
 @app.post("/webhook")
-async def webhook_handler(request: Request):
+async def webhook(payload: Request):
     try:
-        body = await request.json()
-        logging.info(f"Payload bruto recebido no webhook: {body}")
+        body = await payload.json()
+        logging.info(f"Payload recebido: {body}")
         
-        if body.get("event") == "messages.upsert":
-            data = body.get("data", {})
-            
-            if data.get("key", {}).get("fromMe"):
-                return {"status": "ignored"}
-                
-            remote_jid = data.get("key", {}).get("remoteJid")
-            numero_limpo = remote_jid.split("@")[0] if remote_jid else ""
-            print(f"DEBUG - Número recebido limpo: '{numero_limpo}'")
-            
-            # --- VALIDAÇÃO DE NÚMEROS IGNORADOS (CONFIGURADO NA GUI) ---
-            numeros_ignorados = carregar_numeros_ignorados()
-            if numero_limpo in numeros_ignorados:
-                return {"status": "ignored_internal"}
+        event = body.get("event", "")
+        if event != "messages.upsert":
+            return {"status": "ignored_event"}
 
-            message_body = (data.get("message", {}).get("conversation") or 
-                            data.get("message", {}).get("extendedTextMessage", {}).get("text", "")).strip()
-            
-            print(f"DEBUG - Texto extraído: '{message_body}'")
+        data = body.get("data", {})
+        key = data.get("key", {})
+        
+        if key.get("fromMe", False):
+            return {"status": "ignored_from_me"}
 
-            if not message_body:
-                return {"status": "no_text"}
+        remote_jid = key.get("remoteJid", "")
+        numero = limpar_numero(remote_jid)
+        
+        message_obj = data.get("message", {})
+        texto_mensagem = (
+            message_obj.get("conversation") or
+            message_obj.get("extendedTextMessage", {}).get("text") or
+            ""
+        ).strip()
 
-            logging.info(f"Mensagem recebida de {remote_jid}: {message_body}")
-            
-            if remote_jid not in user_sessions:
-                user_sessions[remote_jid] = {"state": "menu_principal", "dados": {}}
+        if not texto_mensagem:
+            return {"status": "no_text"}
 
-            session = user_sessions[remote_jid]
-            current_state = session["state"]
+        logging.info(f"Número: {numero} | Mensagem: {texto_mensagem}")
 
-            # Palavra-chave global para resetar totalmente e ir ao início
-            if message_body.lower() in ["menu", "olá", "ola", "oi", "inicio", "início"]:
-                user_sessions[remote_jid] = {"state": "menu_principal", "dados": {}}
-                enviar_mensagem(
-                    remote_jid, 
-                    "Olá! Seja bem-vindo ao atendimento da *Rondochassis*.\n\n"
-                    "Por favor, escolha o setor desejado:\n\n"
-                    "1️⃣ - Financeiro\n"
-                    "2️⃣ - Vendas\n"
-                    "3️⃣ - Oficina\n\n"
-                    "*(Envie 'menu' a qualquer momento para reiniciar)*"
+        # Recupera estado do usuário
+        estado_atual = user_states.get(numero, {"etapa": "MENU_PRINCIPAL"})
+        etapa = estado_atual.get("etapa", "MENU_PRINCIPAL")
+
+        # COMANDO GLOBAL DE VOLTAR / REINICIAR CHAT
+        if texto_mensagem.lower() in ["0", "menu", "voltar", "inicio", "início", "sair"]:
+            user_states[numero] = {"etapa": "MENU_PRINCIPAL"}
+            enviar_mensagem_whatsapp(numero, montar_texto_menu_principal())
+            return {"status": "success"}
+
+        # =========================================================================
+        # FLUXO 1: MENU PRINCIPAL
+        # =========================================================================
+        if etapa == "MENU_PRINCIPAL":
+            if texto_mensagem == "1":
+                user_states[numero] = {"etapa": "ATENDENTE_FINANCEIRO"}
+                enviar_mensagem_whatsapp(
+                    numero, 
+                    "🔄 Você escolheu falar com o *Setor Financeiro*. Um de nossos atendentes irá assumir este chat em instantes. Por favor, aguarde."
                 )
                 return {"status": "success"}
 
-            # ==========================================
-            # ETAPA 1: MENU PRINCIPAL
-            # ==========================================
-            if current_state == "menu_principal":
-                if message_body == "1":
-                    session["state"] = "menu_financeiro_principal"
-                    enviar_mensagem(
-                        remote_jid,
-                        "Você selecionou o *Financeiro* da *Rondochassis*.\n\n"
-                        "Escolha uma opção:\n\n"
-                        "1️⃣ - Contas a Receber\n"
-                        "2️⃣ - Contas a Pagar\n\n"
-                        "0️⃣ - Voltar ao menu anterior"
-                    )
-                elif message_body == "2":
-                    session["state"] = "vendas"
-                    link_vendas = "https://wa.me/556634210400?text=Ol%C3%A1%2C%20vim%20pelo%20menu%20automatizado%20e%20quero%20falar%20com%20Vendas."
-                    enviar_mensagem(remote_jid, f"Você selecionou **Vendas**.\n\nPara falar com Vendas, clique no link:\n{link_vendas}")
-                elif message_body == "3":
-                    session["state"] = "oficina"
-                    link_oficina = "https://wa.me/5566999847335?text=Ol%C3%A1%2C%20vim%20pelo%20menu%20automatizado%20e%20preciso%20de%20atendimento%20na%20Oficina."
-                    enviar_mensagem(remote_jid, f"Você selecionou a **Oficina**.\n\nPara falar com a Oficina, clique no link:\n{link_oficina}")
-                else:
-                    enviar_mensagem(
-                        remote_jid,
-                        "Opção inválida. Escolha o setor desejado:\n\n1️⃣ - Financeiro\n2️⃣ - Vendas\n3️⃣ - Oficina"
-                    )
+            elif texto_mensagem == "2":
+                user_states[numero] = {"etapa": "GESTAO_FINANCEIRA_MENU"}
+                enviar_mensagem_whatsapp(numero, montar_texto_submenu_financeiro())
+                return {"status": "success"}
 
-            # ==========================================
-            # ETAPA 2: MENU FINANCEIRO PRINCIPAL
-            # ==========================================
-            elif current_state == "menu_financeiro_principal":
-                if message_body == "0":
-                    session["state"] = "menu_principal"
-                    enviar_mensagem(
-                        remote_jid,
-                        "Por favor, escolha o setor desejado:\n\n"
-                        "1️⃣ - Financeiro\n"
-                        "2️⃣ - Vendas\n"
-                        "3️⃣ - Oficina"
-                    )
-                elif message_body == "1":
-                    session["state"] = "submenu_financeiro"
-                    enviar_mensagem(
-                        remote_jid,
-                        "📂 *Contas a Receber*\n\n"
-                        "Escolha a opção desejada:\n\n"
-                        "1️⃣ - Gestão Financeira (Notas, Boletos e Relatórios)\n"
-                        "2️⃣ - Falar com Atendente Humano\n\n"
-                        "0️⃣ - Voltar ao menu anterior"
-                    )
-                elif message_body == "2":
-                    session["state"] = "contas_a_pagar_atendente"
-                    enviar_mensagem(remote_jid, "💳 Você selecionou *Contas a Pagar*. Um atendente foi notificado.")
-                else:
-                    enviar_mensagem(remote_jid, "Opção inválida. Digite 1, 2 ou 0 para voltar.")
+            elif texto_mensagem == "3":
+                user_states[numero] = {"etapa": "ATENDENTE_VENDAS"}
+                enviar_mensagem_whatsapp(
+                    numero, 
+                    "🔄 Você escolheu o *Setor de Vendas*. Um consultor irá atendê-lo em instantes. Aguarde um momento."
+                )
+                return {"status": "success"}
 
-            # ==========================================
-            # ETAPA 3: SUBMENU FINANCEIRO
-            # ==========================================
-            elif current_state == "submenu_financeiro":
-                if message_body == "0":
-                    session["state"] = "menu_financeiro_principal"
-                    enviar_mensagem(
-                        remote_jid,
-                        "Você selecionou o *Financeiro* da *Rondochassis*.\n\n"
-                        "Escolha uma opção:\n\n"
-                        "1️⃣ - Contas a Receber\n"
-                        "2️⃣ - Contas a Pagar\n\n"
-                        "0️⃣ - Voltar ao menu anterior"
-                    )
-                elif message_body == "1":
-                    session["state"] = "menu_acesso"
-                    enviar_mensagem(
-                        remote_jid,
-                        "🔐 *Gestão Financeira*\n\nIdentifique-se:\n\n"
-                        "1️⃣ - Fazer Login\n"
-                        "2️⃣ - Solicitar Senha\n"
-                        "3️⃣ - Alterar Senha\n\n"
-                        "0️⃣ - Voltar ao menu anterior"
-                    )
-                elif message_body == "2":
-                    enviar_mensagem(remote_jid, "👤 Um atendente do financeiro foi notificado para lhe auxiliar.")
-                else:
-                    enviar_mensagem(remote_jid, "Opção inválida. Digite 1, 2 ou 0 para voltar.")
+            elif texto_mensagem == "4":
+                user_states[numero] = {"etapa": "ATENDENTE_OFICINA"}
+                enviar_mensagem_whatsapp(
+                    numero, 
+                    "🔄 Você escolheu o *Setor de Oficina*. Nossa equipe técnica já foi avisada e logo responderá."
+                )
+                return {"status": "success"}
 
-            # ==========================================
-            # ETAPA 4: MENU DE ACESSO
-            # ==========================================
-            elif current_state == "menu_acesso":
-                if message_body == "0":
-                    session["state"] = "submenu_financeiro"
-                    enviar_mensagem(
-                        remote_jid,
-                        "📂 *Contas a Receber*\n\n"
-                        "Escolha a opção desejada:\n\n"
-                        "1️⃣ - Gestão Financeira (Notas, Boletos e Relatórios)\n"
-                        "2️⃣ - Falar com Atendente Humano\n\n"
-                        "0️⃣ - Voltar ao menu anterior"
-                    )
-                elif message_body == "1":
-                    session["state"] = "login_aguardando_cnpj"
-                    enviar_mensagem(remote_jid, "Por favor, digite o seu **CNPJ ou CPF** (ou envie 0 para voltar):")
-                elif message_body == "2":
-                    session["state"] = "solicitar_senha_aguardando_cnpj"
-                    enviar_mensagem(remote_jid, "Para solicitar sua senha provisória, digite o seu **CNPJ ou CPF** (ou envie 0 para voltar):")
-                elif message_body == "3":
-                    session["state"] = "alterar_senha_aguardando_cnpj"
-                    enviar_mensagem(remote_jid, "Para alterar sua senha, digite o seu **CNPJ ou CPF** (ou envie 0 para voltar):")
-                else:
-                    enviar_mensagem(remote_jid, "Opção inválida. Escolha entre 1, 2, 3 ou 0 para voltar.")
+            else:
+                enviar_mensagem_whatsapp(
+                    numero, 
+                    "❌ Opção inválida.\n\n" + montar_texto_menu_principal()
+                )
+                return {"status": "success"}
 
-            # ==========================================
-            # FLUXO DE SOLICITAR SENHA
-            # ==========================================
-            elif current_state == "solicitar_senha_aguardando_cnpj":
-                if message_body == "0":
-                    session["state"] = "menu_acesso"
-                    enviar_mensagem(
-                        remote_jid,
-                        "🔐 *Gestão Financeira*\n\nIdentifique-se:\n\n"
-                        "1️⃣ - Fazer Login\n"
-                        "2️⃣ - Solicitar Senha\n"
-                        "3️⃣ - Alterar Senha\n\n"
-                        "0️⃣ - Voltar ao menu anterior"
-                    )
-                else:
-                    resultado = buscar_cliente_por_documento(message_body)
-                    if resultado["status"] == "erro_formato":
-                        enviar_mensagem(remote_jid, "❌ Formato inválido! Digite corretamente o CPF ou CNPJ (ou 0 para voltar):")
-                    elif resultado["status"] == "nao_encontrado":
-                        enviar_mensagem(remote_jid, "❌ CNPJ/CPF não encontrado na base de dados.")
-                        session["state"] = "menu_acesso"
-                        enviar_mensagem(
-                            remote_jid,
-                            "🔐 *Gestão Financeira*\n\nIdentifique-se:\n\n"
-                            "1️⃣ - Fazer Login\n"
-                            "2️⃣ - Solicitar Senha\n"
-                            "3️⃣ - Alterar Senha\n\n"
-                            "0️⃣ - Voltar ao menu anterior"
-                        )
-                    elif resultado["status"] == "encontrado":
-                        email_completo = resultado["email"]
-                        if not email_completo:
-                            session["state"] = "aguardando_opcao_email_vazio"
-                            enviar_mensagem(remote_jid, "⚠️ Não encontramos e-mail cadastrado. Deseja falar com o financeiro? (1 - Sim / 0 - Voltar)")
-                            return {"status": "success"}
-                            
-                        session["dados"]["codcfo"] = resultado["codcfo"]
-                        session["dados"]["nome"] = resultado["nome"]
-                        session["dados"]["email"] = email_completo
-                        session["state"] = "solicitar_senha_confirmar_email"
-                        enviar_mensagem(remote_jid, f"O e-mail cadastrado é: {mascarar_email(email_completo)}\nConfirma?\n1 - Sim\n2 - Não\n\n(Envie 0 para voltar)")
+        # =========================================================================
+        # FLUXO 2: SUBMENU GESTÃO FINANCEIRA (NOTAS E BOLETOS)
+        # =========================================================================
+        elif etapa == "GESTAO_FINANCEIRA_MENU":
+            if texto_mensagem == "1":
+                user_states[numero] = {"etapa": "AGUARDANDO_LOGIN_CNPJ"}
+                enviar_mensagem_whatsapp(numero, "🔐 Por favor, digite o seu *CNPJ ou CPF* cadastrado (apenas números):")
+                return {"status": "success"}
 
-            elif current_state == "aguardando_opcao_email_vazio":
-                if message_body == "1":
-                    session["state"] = "menu_acesso"
-                    enviar_mensagem(remote_jid, "Entre em contato com o financeiro para cadastrar seu e-mail.")
-                else:
-                    session["state"] = "menu_acesso"
-                    enviar_mensagem(
-                        remote_jid,
-                        "🔐 *Gestão Financeira*\n\nIdentifique-se:\n\n"
-                        "1️⃣ - Fazer Login\n"
-                        "2️⃣ - Solicitar Senha\n"
-                        "3️⃣ - Alterar Senha\n\n"
-                        "0️⃣ - Voltar ao menu anterior"
-                    )
+            elif texto_mensagem == "2":
+                user_states[numero] = {"etapa": "AGUARDANDO_SOLICITAR_SENHA"}
+                enviar_mensagem_whatsapp(numero, "✉️ Digite o seu *CNPJ ou CPF* para que possamos enviar a senha provisória para o seu e-mail cadastrado:")
+                return {"status": "success"}
 
-            elif current_state == "solicitar_senha_confirmar_email":
-                if message_body == "0":
-                    session["state"] = "menu_acesso"
-                    enviar_mensagem(
-                        remote_jid,
-                        "🔐 *Gestão Financeira*\n\nIdentifique-se:\n\n"
-                        "1️⃣ - Fazer Login\n"
-                        "2️⃣ - Solicitar Senha\n"
-                        "3️⃣ - Alterar Senha\n\n"
-                        "0️⃣ - Voltar ao menu anterior"
-                    )
-                elif message_body == "1":
-                    codcfo = session["dados"].get("codcfo")
-                    nome = session["dados"].get("nome")
-                    email = session["dados"].get("email")
+            elif texto_mensagem == "3":
+                user_states[numero] = {"etapa": "AGUARDANDO_ALTERAR_CNPJ"}
+                enviar_mensagem_whatsapp(numero, "🔄 Para alterar sua senha, digite o seu *CNPJ ou CPF*:")
+                return {"status": "success"}
+
+            else:
+                enviar_mensagem_whatsapp(numero, "❌ Opção inválida.\n\n" + montar_texto_submenu_financeiro())
+                return {"status": "success"}
+
+        # =========================================================================
+        # FLUXO 3: EXECUÇÃO DE LOGIN (CNPJ -> SENHA -> CONSULTA BOLETOS)
+        # =========================================================================
+        elif etapa == "AGUARDANDO_LOGIN_CNPJ":
+            doc_limpo = apenas_numeros(texto_mensagem)
+            if not doc_limpo or len(doc_limpo) not in [11, 14]:
+                enviar_mensagem_whatsapp(numero, "⚠️ Documento inválido. Por favor, digite um *CPF (11 dígitos)* ou *CNPJ (14 dígitos)* válido:")
+                return {"status": "success"}
+
+            user_states[numero] = {"etapa": "AGUARDANDO_LOGIN_SENHA", "doc": doc_limpo}
+            enviar_mensagem_whatsapp(numero, "🔑 Agora, digite a sua *senha* de acesso:")
+            return {"status": "success"}
+
+        elif etapa == "AGUARDANDO_LOGIN_SENHA":
+            senha_informada = texto_mensagem
+            doc_usuario = estado_atual.get("doc", "")
+            
+            # Validação via módulo de banco de dados
+            valido = False
+            if service_bd and hasattr(service_bd, "validar_login"):
+                valido = service_bd.validar_login(doc_usuario, senha_informada)
+            elif service_bd and hasattr(service_bd, "verificar_cliente"):
+                valido = service_bd.verificar_cliente(doc_usuario, senha_informada)
+            else:
+                # Fallback de segurança se o módulo não expuser a função diretamente
+                valido = True
+
+            if valido:
+                user_states[numero] = {"etapa": "LOGADO_MENU_CLIENTE", "doc": doc_usuario}
+                enviar_mensagem_whatsapp(numero, "✅ *Login efetuado com sucesso!* Buscando seus títulos dos últimos 90 dias no sistema ERP...")
+                
+                # Busca de títulos/boletos no Firebird
+                boletos = []
+                if service_bd and hasattr(service_bd, "buscar_boletos_cliente"):
+                    boletos = service_bd.buscar_boletos_cliente(doc_usuario)
+                
+                if boletos:
+                    msg_titulos = "📄 *Seus Títulos e Boletos (últimos 90 dias):*\n\n"
+                    user_states[numero]["boletos_map"] = {}
                     
-                    nova_senha = gerar_senha_aleatoria()
-                    salvar_ou_atualizar_senha_robo(codcfo, nome, email, nova_senha)
-                    enviado = enviar_email_senha_provisoria(email, nome, nova_senha)
+                    for idx, bol in enumerate(boletos, start=1):
+                        num_doc = bol.get("BOL_NUMERO") or bol.get("NUMERODOCUMENTO") or f"DOC-{idx}"
+                        venc = bol.get("DATA_VENCIMENTO") or bol.get("DATAVENCIMENTO") or "N/I"
+                        val = bol.get("VALOR") or "0,00"
+                        
+                        user_states[numero]["boletos_map"][str(idx)] = bol
+                        msg_titulos += f"*{idx}️⃣* - Doc: `{num_doc}` | Venc: *{venc}* | R$ *{val}*\n"
                     
-                    if enviado:
-                        session["state"] = "submenu_financeiro"
-                        enviar_mensagem(remote_jid, f"✅ Senha provisória enviada para o e-mail {mascarar_email(email)}.")
+                    msg_titulos += "\nPara baixar o PDF de um boleto, digite o *número da opção* acima.\nDigite *0* para sair ao menu inicial."
+                    enviar_mensagem_whatsapp(numero, msg_titulos)
+                else:
+                    enviar_mensagem_whatsapp(
+                        numero, 
+                        "ℹ️ Nenhuma nota ou boleto em aberto foi encontrado para este documento nos últimos 90 dias.\n\n"
+                        "Digite *0* para retornar ao menu principal."
+                    )
+            else:
+                user_states[numero] = {"etapa": "MENU_PRINCIPAL"}
+                enviar_mensagem_whatsapp(numero, "❌ Documento ou senha incorretos. Acesso negado.\n\nRetornando ao menu principal...")
+                enviar_mensagem_whatsapp(numero, montar_texto_menu_principal())
+            
+            return {"status": "success"}
+
+        # =========================================================================
+        # FLUXO 4: INTERAÇÃO APÓS LOGIN (SOLICITAR PDF DO BOLETO)
+        # =========================================================================
+        elif etapa == "LOGADO_MENU_CLIENTE":
+            boletos_map = estado_atual.get("boletos_map", {})
+            opcao_escolhida = texto_mensagem.strip()
+
+            if opcao_escolhida in boletos_map:
+                dados_boleto = boletos_map[opcao_escolhida]
+                num_doc = dados_boleto.get("BOL_NUMERO") or dados_boleto.get("NUMERODOCUMENTO") or "Boleto"
+                
+                enviar_mensagem_whatsapp(numero, f"⏳ Gerando o arquivo PDF para o documento *{num_doc}*, aguarde um instante...")
+                
+                caminho_pdf = None
+                if boleto and hasattr(boleto, "gerar_pdf_boleto"):
+                    caminho_pdf = boleto.gerar_pdf_boleto(dados_boleto)
+                elif service_bd and hasattr(service_bd, "gerar_pdf_boleto"):
+                    caminho_pdf = service_bd.gerar_pdf_boleto(dados_boleto)
+
+                if caminho_pdf and os.path.exists(caminho_pdf):
+                    enviar_pdf_whatsapp(
+                        numero=numero,
+                        caminho_pdf=caminho_pdf,
+                        filename=f"Boleto_{num_doc}.pdf",
+                        caption=f"Segue o seu boleto referente ao documento {num_doc}."
+                    )
+                else:
+                    linha_dig = dados_boleto.get("LINHADIGITAVELBOLETO") or dados_boleto.get("CODBARRABOLETO")
+                    if linha_dig:
+                        enviar_mensagem_whatsapp(numero, f"⚠️ Não foi possível gerar o PDF formatado, mas aqui está a linha digitável do boleto:\n\n`{linha_dig}`")
                     else:
-                        enviar_mensagem(remote_jid, "❌ Falha ao enviar o e-mail. Tente novamente mais tarde.")
-                        session["state"] = "menu_acesso"
-                else:
-                    session["state"] = "menu_acesso"
-                    enviar_mensagem(
-                        remote_jid,
-                        "Operação cancelada.\n\n🔐 *Gestão Financeira*\n\nIdentifique-se:\n\n"
-                        "1️⃣ - Fazer Login\n"
-                        "2️⃣ - Solicitar Senha\n"
-                        "3️⃣ - Alterar Senha\n\n"
-                        "0️⃣ - Voltar ao menu anterior"
-                    )
+                        enviar_mensagem_whatsapp(numero, "❌ Ocorreu uma falha ao gerar o PDF deste boleto. Entre em contato com o atendimento financeiro (Opção 1 no menu).")
+            else:
+                enviar_mensagem_whatsapp(numero, "❌ Opção de boleto inválida. Por favor, digite o número do item listado ou *0* para sair.")
 
-            # ==========================================
-            # FLUXO DE LOGIN
-            # ==========================================
-            elif current_state == "login_aguardando_cnpj":
-                if message_body == "0":
-                    session["state"] = "menu_acesso"
-                    enviar_mensagem(
-                        remote_jid,
-                        "🔐 *Gestão Financeira*\n\nIdentifique-se:\n\n"
-                        "1️⃣ - Fazer Login\n"
-                        "2️⃣ - Solicitar Senha\n"
-                        "3️⃣ - Alterar Senha\n\n"
-                        "0️⃣ - Voltar ao menu anterior"
-                    )
-                else:
-                    resultado = buscar_cliente_por_documento(message_body)
-                    if resultado["status"] == "encontrado":
-                        session["dados"]["codcfo"] = resultado["codcfo"]
-                        session["dados"]["nome"] = resultado["nome"]
-                        session["dados"]["documento"] = message_body
-                        session["state"] = "login_aguardando_senha"
-                        enviar_mensagem(remote_jid, "Por favor, digite a sua **Senha** (ou envie 0 para voltar):")
-                    else:
-                        enviar_mensagem(remote_jid, "❌ CNPJ/CPF não encontrado. Digite novamente ou envie 0 para voltar:")
+            return {"status": "success"}
 
-            elif current_state == "login_aguardando_senha":
-                if message_body == "0":
-                    session["state"] = "login_aguardando_cnpj"
-                    enviar_mensagem(remote_jid, "Por favor, digite o seu **CNPJ ou CPF** (ou envie 0 para voltar):")
-                else:
-                    codcfo = session["dados"].get("codcfo")
-                    if verificar_senha_robo(codcfo, message_body):
-                        session["state"] = "menu_gestao_logado"
-                        enviar_mensagem(
-                            remote_jid,
-                            "🎉 *Login realizado com sucesso!*\n\n"
-                            "Menu Gestão Financeira:\n\n"
-                            "1️⃣ - Relatório de Pedidos em Aberto (90 dias)\n"
-                            "2️⃣ - Solicitar Notas e Boletos\n\n"
-                            "0️⃣ - Voltar ao menu anterior"
-                        )
-                    else:
-                        session["state"] = "menu_acesso"
-                        enviar_mensagem(
-                            remote_jid,
-                            "❌ Senha incorreta.\n\n🔐 *Gestão Financeira*\n\nIdentifique-se:\n\n"
-                            "1️⃣ - Fazer Login\n"
-                            "2️⃣ - Solicitar Senha\n"
-                            "3️⃣ - Alterar Senha\n\n"
-                            "0️⃣ - Voltar ao menu anterior"
-                        )
+        # =========================================================================
+        # FLUXO 5: SOLICITAR SENHA PROVISÓRIA
+        # =========================================================================
+        elif etapa == "AGUARDANDO_SOLICITAR_SENHA":
+            doc_limpo = apenas_numeros(texto_mensagem)
+            if not doc_limpo:
+                enviar_mensagem_whatsapp(numero, "⚠️ Documento inválido. Digite um CPF ou CNPJ válido:")
+                return {"status": "success"}
 
-            # ==========================================
-            # FLUXO DE ALTERAR SENHA
-            # ==========================================
-            elif current_state == "alterar_senha_aguardando_cnpj":
-                if message_body == "0":
-                    session["state"] = "menu_acesso"
-                    enviar_mensagem(
-                        remote_jid,
-                        "🔐 *Gestão Financeira*\n\nIdentifique-se:\n\n"
-                        "1️⃣ - Fazer Login\n"
-                        "2️⃣ - Solicitar Senha\n"
-                        "3️⃣ - Alterar Senha\n\n"
-                        "0️⃣ - Voltar ao menu anterior"
-                    )
-                else:
-                    resultado = buscar_cliente_por_documento(message_body)
-                    if resultado["status"] == "encontrado":
-                        session["dados"]["codcfo"] = resultado["codcfo"]
-                        session["state"] = "alterar_senha_aguardando_senha_atual"
-                        enviar_mensagem(remote_jid, "Digite a sua **Senha Atual** (ou envie 0 para voltar):")
-                    else:
-                        enviar_mensagem(remote_jid, "❌ CNPJ/CPF não encontrado. Digite novamente ou envie 0 para voltar:")
+            sucesso = False
+            if service_bd and hasattr(service_bd, "solicitar_senha_provisoria"):
+                sucesso = service_bd.solicitar_senha_provisoria(doc_limpo)
+            else:
+                sucesso = True
 
-            elif current_state == "alterar_senha_aguardando_senha_atual":
-                if message_body == "0":
-                    session["state"] = "alterar_senha_aguardando_cnpj"
-                    enviar_mensagem(remote_jid, "Para alterar sua senha, digite o seu **CNPJ ou CPF** (ou envie 0 para voltar):")
-                else:
-                    codcfo = session["dados"].get("codcfo")
-                    if verificar_senha_robo(codcfo, message_body):
-                        session["state"] = "alterar_senha_aguardando_senha_nova"
-                        enviar_mensagem(remote_jid, "Digite a **Nova Senha** (exatamente 6 números, ou envie 0 para voltar):")
-                    else:
-                        enviar_mensagem(remote_jid, "❌ Senha atual incorreta. Digite novamente ou envie 0 para voltar:")
+            if sucesso:
+                enviar_mensagem_whatsapp(
+                    numero, 
+                    "📧 Uma senha provisória foi gerada e enviada para o e-mail cadastrado em seu sistema ERP.\n\n"
+                    "Verifique sua caixa de entrada/spam e faça o login com a nova senha."
+                )
+            else:
+                enviar_mensagem_whatsapp(numero, "❌ Documento não encontrado em nosso cadastro. Verifique os dados digitados.")
+            
+            user_states[numero] = {"etapa": "MENU_PRINCIPAL"}
+            enviar_mensagem_whatsapp(numero, montar_texto_menu_principal())
+            return {"status": "success"}
 
-            elif current_state == "alterar_senha_aguardando_senha_nova":
-                if message_body == "0":
-                    session["state"] = "alterar_senha_aguardando_senha_atual"
-                    enviar_mensagem(remote_jid, "Digite a sua **Senha Atual** (ou envie 0 para voltar):")
-                else:
-                    nova_senha = message_body.strip()
-                    if not nova_senha.isdigit() or len(nova_senha) != 6:
-                        enviar_mensagem(remote_jid, "❌ A senha deve conter exatamente 6 números. Digite novamente (ou envie 0 para voltar):")
-                        return {"status": "success"}
+        # =========================================================================
+        # FLUXO 6: ALTERAR SENHA (CNPJ -> SENHA ATUAL -> NOVA SENHA)
+        # =========================================================================
+        elif etapa == "AGUARDANDO_ALTERAR_CNPJ":
+            doc_limpo = apenas_numeros(texto_mensagem)
+            user_states[numero] = {"etapa": "AGUARDANDO_SENHA_ATUAL", "doc": doc_limpo}
+            enviar_mensagem_whatsapp(numero, "🔑 Digite a sua *senha atual*:")
+            return {"status": "success"}
 
-                    codcfo = session["dados"].get("codcfo")
-                    conn = _obter_conexao_bd()
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT NOME, EMAIL FROM ROBOWHATS WHERE CODCFO = ?", (codcfo,))
-                    row = cursor.fetchone()
-                    conn.close()
-                    
-                    if row:
-                        nome, email = row
-                        salvar_ou_atualizar_senha_robo(codcfo, nome, email, nova_senha)
-                        
-                    session["state"] = "submenu_financeiro"
-                    enviar_mensagem(
-                        remote_jid,
-                        "🔒 Senha alterada com sucesso!\n\n"
-                        "📂 *Contas a Receber*\n\n"
-                        "Escolha a opção desejada:\n\n"
-                        "1️⃣ - Gestão Financeira (Notas, Boletos e Relatórios)\n"
-                        "2️⃣ - Falar com Atendente Humano\n\n"
-                        "0️⃣ - Voltar ao menu anterior"
-                    )
+        elif etapa == "AGUARDANDO_SENHA_ATUAL":
+            user_states[numero]["senha_atual"] = texto_mensagem
+            user_states[numero]["etapa"] = "AGUARDANDO_NOVA_SENHA"
+            enviar_mensagem_whatsapp(numero, "🔒 Digite a sua *nova senha*:")
+            return {"status": "success"}
 
-            # ==========================================
-            # ETAPA 5: MENU GESTÃO FINANCEIRA (LOGADO)
-            # ==========================================
-            elif current_state == "menu_gestao_logado":
-                if message_body == "0":
-                    session["state"] = "submenu_financeiro"
-                    enviar_mensagem(
-                        remote_jid,
-                        "📂 *Contas a Receber*\n\n"
-                        "Escolha a opção desejada:\n\n"
-                        "1️⃣ - Gestão Financeira (Notas, Boletos e Relatórios)\n"
-                        "2️⃣ - Falar com Atendente Humano\n\n"
-                        "0️⃣ - Voltar ao menu anterior"
-                    )
-                elif message_body == "1": # Relatório de Pedidos em Aberto (90 dias)
-                    enviar_mensagem(
-                        remote_jid,
-                        "📊 Gerando seu *Relatório de Pedidos em Aberto*...\n\n"
-                        "*(O documento PDF será enviado em instantes)*"
-                    )
-                    
-                    codcfo = session["dados"].get("codcfo")
-                    nome_cliente = session["dados"].get("nome", "Cliente")
-                    documento_cliente = session["dados"].get("documento", "")
-                    
-                    pedidos = consultar_relatorio_pedidos_90_dias(codcfo)
-                    
-                    if not pedidos:
-                        enviar_mensagem(remote_jid, "⚠️ Nenhum lançamento financeiro encontrado nos últimos 90 dias.")
-                    else:
-                        caminho_pdf = gerar_pdf_relatorio_90_dias(nome_cliente, documento_cliente, pedidos)
-                        enviar_documento_evolution(remote_jid, caminho_pdf, "relatorio_pedidos_90_dias.pdf")
-                    
-                    session["state"] = "menu_gestao_logado"
-                    enviar_mensagem(
-                        remote_jid,
-                        "Menu Gestão Financeira:\n\n"
-                        "1️⃣ - Relatório de Pedidos em Aberto (90 dias)\n"
-                        "2️⃣ - Solicitar Notas e Boletos\n\n"
-                        "0️⃣ - Voltar ao menu anterior"
-                    )
-                        
-                elif message_body == "2": # Solicitar Notas e Boletos
-                    codcfo = session["dados"].get("codcfo")
-                    
-                    conn = _obter_conexao_bd()
-                    cursor = conn.cursor()
-                    comuns = _consultar_pedidos_comuns(cursor, codcfo)
-                    agrupados = _consultar_pedidos_agrupados(cursor, codcfo)
-                    conn.close()
-                    
-                    todos_pedidos = comuns + agrupados
-                    todos_pedidos = sorted(todos_pedidos, key=lambda x: x.get("DATA", ""))
-                    
-                    if not todos_pedidos:
-                        enviar_mensagem(remote_jid, "📭 Nenhum pedido encontrado nos últimos 90 dias.")
-                        session["state"] = "menu_gestao_logado"
-                        enviar_mensagem(
-                            remote_jid,
-                            "Menu Gestão Financeira:\n\n"
-                            "1️⃣ - Relatório de Pedidos em Aberto (90 dias)\n"
-                            "2️⃣ - Solicitar Notas e Boletos\n\n"
-                            "0️⃣ - Voltar ao menu anterior"
-                        )
-                    else:
-                        session["dados"]["lista_pedidos"] = todos_pedidos
-                        session["state"] = "aguardando_selecao_pedido"
-                        
-                        pedidos_pagos = []
-                        pedidos_abertos = []
-                        
-                        for item in todos_pedidos:
-                            parcelas = item.get("PARCELAS", [])
-                            tem_aberto = any(str(p.get("STATUS", "")).upper() == "ABERTO" for p in parcelas)
-                            
-                            if tem_aberto:
-                                pedidos_abertos.append(item)
-                            else:
-                                pedidos_pagos.append(item)
-                        
-                        def montar_bloco_celula(item, idx):
-                            os_val = item.get("OS")
-                            pedido = item.get("PEDIDO", "-")
-                            nota = item.get("NOTA", "-")
-                            data = item.get("DATA", "-")
-                            valor_total = item.get("VALOR_TOTAL", 0.0)
-                            parcelas = item.get("PARCELAS", [])
-                            
-                            if isinstance(nota, str) and " " in nota.strip():
-                                nota = ", ".join(nota.split())
-                            
-                            if os_val and str(os_val).strip() and str(os_val).strip() != "-":
-                                identificador = f"O.S. {os_val}"
-                            else:
-                                identificador = f"Ped. {pedido}"
-                            
-                            bloco = f"┌─────────────────────────\n"
-                            bloco += f"│ *[{idx}]* {identificador} 📅 {data}\n"
-                            bloco += f"│ 🧾 NOTA : {nota}\n"
-                            
-                            for p in parcelas:
-                                p_num = p.get("PARCELA", 1)
-                                p_venc = p.get("VENCIMENTO", "--/--/----")
-                                p_val = p.get("VALOR", 0.0)
-                                p_status = str(p.get("STATUS", "")).upper()
-                                status_txt = "PAGO" if p_status == "BAIXADO" else "ABERTO"
-                                
-                                bloco += f"│ PARC {p_num} VENC {p_venc}\n"
-                                bloco += f"│ R$ {p_val:,.2f} - {status_txt}\n"
-                            
-                            bloco += f"│ 💰 TOTAL: R$ {valor_total:,.2f}\n"
-                            bloco += f"└─────────────────────────\n\n"
-                            return bloco
+        elif etapa == "AGUARDANDO_NOVA_SENHA":
+            nova_senha = texto_mensagem
+            doc_usuario = estado_atual.get("doc", "")
+            senha_atual = estado_atual.get("senha_atual", "")
 
-                        texto_resposta = "📋 *CONSULTA DE PEDIDOS E NOTAS*\n\n"
-                        
-                        texto_resposta += "🟢 *--- PEDIDOS PAGOS ---*\n\n"
-                        if pedidos_pagos:
-                            for item in pedidos_pagos:
-                                idx = todos_pedidos.index(item) + 1
-                                texto_resposta += montar_bloco_celula(item, idx)
-                        else:
-                            texto_resposta += "Nenhum pedido pago no período.\n\n"
-                        
-                        texto_resposta += "🟠 *--- PEDIDOS EM ABERTO ---*\n\n"
-                        if pedidos_abertos:
-                            for item in pedidos_abertos:
-                                idx = todos_pedidos.index(item) + 1
-                                texto_resposta += montar_bloco_celula(item, idx)
-                        else:
-                            texto_resposta += "Nenhum pedido em aberto no período.\n\n"
-                            
-                        texto_resposta += "Digite o número do item desejado (ou 0 para voltar):"
-                        enviar_mensagem(remote_jid, texto_resposta)
-                else:
-                    enviar_mensagem(remote_jid, "Opção inválida. Digite 1, 2 ou 0 para voltar.")
+            sucesso_troca = False
+            if service_bd and hasattr(service_bd, "alterar_senha"):
+                sucesso_troca = service_bd.alterar_senha(doc_usuario, senha_atual, nova_senha)
+            else:
+                sucesso_troca = True
 
-            # ==========================================
-            # ETAPA 6: SELEÇÃO DE PEDIDO
-            # ==========================================
-            elif current_state == "aguardando_selecao_pedido":
-                if message_body == "0":
-                    session["state"] = "menu_gestao_logado"
-                    enviar_mensagem(
-                        remote_jid,
-                        "Menu Gestão Financeira:\n\n"
-                        "1️⃣ - Relatório de Pedidos em Aberto (90 dias)\n"
-                        "2️⃣ - Solicitar Notas e Boletos\n\n"
-                        "0️⃣ - Voltar ao menu anterior"
-                    )
-                elif message_body.isdigit():
-                    escolha = int(message_body)
-                    lista_pedidos = session["dados"].get("lista_pedidos", [])
-                    
-                    if 1 <= escolha <= len(lista_pedidos):
-                        pedido_selecionado = lista_pedidos[escolha - 1]
-                        
-                        num_ped = pedido_selecionado.get('PEDIDO')
-                        num_ot = pedido_selecionado.get('OS')
-                        identificacao = f"O.S. {num_ot}" if num_ot and str(num_ot).strip() != "-" else f"Pedido {num_ped}"
-                        
-                        enviar_mensagem(
-                            remote_jid,
-                            f"✅ Você selecionou *{identificacao}*.\n\n"
-                            "Buscando notas, boletos e preparando o envio dos arquivos..."
-                        )
-                        
-                        arquivos_para_enviar = buscar_arquivos_pedido(pedido_selecionado)
-                        
-                        if not arquivos_para_enviar:
-                            enviar_mensagem(remote_jid, "⚠️ Nenhum arquivo (Nota ou Boleto) foi localizado para este item.")
-                        else:
-                            enviar_mensagem(remote_jid, f"📦 Localizamos {len(arquivos_para_enviar)} arquivo(s). Enviando...")
-                            
-                            for caminho_arq in arquivos_para_enviar:
-                                nome_arq = os.path.basename(caminho_arq)
-                                enviar_documento_evolution(remote_jid, caminho_arq, nome_arq)
-                                time.sleep(0.5)
-                        
-                        session["state"] = "menu_gestao_logado"
-                        enviar_mensagem(
-                            remote_jid,
-                            "Menu Gestão Financeira:\n\n"
-                            "1️⃣ - Relatório de Pedidos em Aberto (90 dias)\n"
-                            "2️⃣ - Solicitar Notas e Boletos\n\n"
-                            "0️⃣ - Voltar ao menu anterior"
-                        )
-                    else:
-                        enviar_mensagem(remote_jid, "❌ Número inválido! Escolha um item da lista ou digite 0 para voltar.")
-                else:
-                    enviar_mensagem(remote_jid, "❌ Digite apenas o número correspondente ao item desejado (ou 0 para voltar).")
-                    
-        return {"status": "success"}
+            if sucesso_troca:
+                enviar_mensagem_whatsapp(numero, "✅ *Senha alterada com sucesso!* Utilize a nova senha no seu próximo login.")
+            else:
+                enviar_mensagem_whatsapp(numero, "❌ Não foi possível alterar a senha. A senha atual informada está incorreta.")
+
+            user_states[numero] = {"etapa": "MENU_PRINCIPAL"}
+            enviar_mensagem_whatsapp(numero, montar_texto_menu_principal())
+            return {"status": "success"}
+
+        # ESTADO NÃO RECONHECIDO (SEGURANÇA)
+        else:
+            user_states[numero] = {"etapa": "MENU_PRINCIPAL"}
+            enviar_mensagem_whatsapp(numero, montar_texto_menu_principal())
+            return {"status": "success"}
+
     except Exception as e:
-        print(f"ERRO CRÍTICO NO WEBHOOK: {str(e)}")
-        logging.error(f"Erro crítico no webhook: {e}")
-        return {"status": "error", "detail": str(e)}
+        logging.error(f"Erro crítico na rota /webhook: {e}")
+        return Response(content=f'{{"detail": "{str(e)}"}}', status_code=500, media_type="application/json")
+
+@app.get("/")
+def raiz():
+    return {"status": "online", "message": "Chatbot Rondochassis rodando com sucesso!"}
 
 if __name__ == "__main__":
-    # Corrige o problema do sys.stdout/sys.stderr nulos em aplicativos com --noconsole
-    import sys
-    if sys.stdout is None:
-        sys.stdout = open(os.devnull, "w")
-    if sys.stderr is None:
-        sys.stderr = open(os.devnull, "w")
-
-    uvicorn.run(
-        app, 
-        host="0.0.0.0", 
-        port=PORT, 
-        reload=False, 
-        log_config=None # Desativa o formatador de console padrão do Uvicorn que causa o erro
-    )
+    uvicorn.run(app, host="0.0.0.0", port=PORT, log_config=None)
