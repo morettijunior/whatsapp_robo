@@ -1,6 +1,8 @@
 import sys
 import datetime
+import json
 from pathlib import Path
+from xml.sax.saxutils import escape
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
@@ -9,6 +11,7 @@ from reportlab.graphics.barcode import code128
 from reportlab.graphics.barcode.qr import QrCodeWidget
 from reportlab.graphics.shapes import Drawing
 
+
 def formatar_moeda(valor):
     """Formata float para o padrão monetário brasileiro (ex: 1.0 -> 1,00 ou 1500.5 -> 1.500,50)"""
     if not valor:
@@ -16,6 +19,7 @@ def formatar_moeda(valor):
     val_str = f"{float(valor):,.2f}"
     val_str = val_str.replace(",", "X").replace(".", ",").replace("X", ".")
     return val_str
+
 
 def formatar_linha_digitavel(linha):
     """Formata a linha digitável adicionando os pontos nos blocos padrão"""
@@ -31,14 +35,24 @@ def formatar_linha_digitavel(linha):
         return f"{b1} {b2} {b3} {b4} {b5}"
     return linha
 
+
 def obter_caminho_logo(caminhos_config=None, nome_arquivo="756.bmp"):
     """
     Localiza o arquivo exato da logo do banco configurado na GUI ou busca nos diretórios padrão.
     """
+    if not caminhos_config:
+        config_file = Path.home() / "Documents" / "RondochassisBot" / "config_sistema.json"
+        if config_file.exists():
+            try:
+                with open(config_file, "r", encoding="utf-8") as f:
+                    caminhos_config = json.load(f)
+            except Exception:
+                caminhos_config = {}
+
     if caminhos_config:
         caminho_customizado_str = caminhos_config.get("logo_banco") or caminhos_config.get("LOGO_BANCO")
         if caminho_customizado_str:
-            caminho_customizado = Path(caminho_customizado_str)
+            caminho_customizado = Path(caminho_customizado_str.strip())
             if caminho_customizado.exists():
                 return str(caminho_customizado)
 
@@ -55,7 +69,8 @@ def obter_caminho_logo(caminhos_config=None, nome_arquivo="756.bmp"):
     if caminho_atual.exists():
         return str(caminho_atual)
         
-    return nome_arquivo
+    return None
+
 
 def gerar_pdf_boleto(dados_pedido, pasta_destino, caminhos_config=None):
     caminho_saida = Path(pasta_destino)
@@ -98,6 +113,12 @@ def gerar_pdf_boleto(dados_pedido, pasta_destino, caminhos_config=None):
         linha_dig = boleto.get("LINHADIGITAVELBOLETO", "")
         pix = boleto.get("QRCODEPIX", "")
         
+        historico_raw = str(boleto.get("HISTORICO") or "").strip()
+        linha_historico = (
+            f"{escape(historico_raw).replace(chr(13), '').replace(chr(10), '<br/>')}<br/>"
+            if historico_raw else ""
+        )
+        
         nome_arquivo = f"Boleto_{num_ped_ref}_P{parcela}.pdf"
         caminho_arquivo = caminho_saida / nome_arquivo
         
@@ -119,10 +140,10 @@ def gerar_pdf_boleto(dados_pedido, pasta_destino, caminhos_config=None):
         venc_fmt = "/".join(vencimento.split("-")[::-1]) if "-" in vencimento else vencimento
         linha_dig_formatada = formatar_linha_digitavel(linha_dig)
 
-        try:
-            caminho_logo = obter_caminho_logo(caminhos_config, "756.bmp")
+        caminho_logo = obter_caminho_logo(caminhos_config, "756.bmp")
+        if caminho_logo and Path(caminho_logo).exists():
             logo_banco = Image(caminho_logo, width=60, height=15)
-        except Exception:
+        else:
             logo_banco = Paragraph("<b>SICOOB</b>", style_val)
 
         # -------------------------------------------------------------
@@ -167,6 +188,7 @@ def gerar_pdf_boleto(dados_pedido, pasta_destino, caminhos_config=None):
                 Paragraph(
                     "Instruções (Texto de responsabilidade do beneficiário.)<br/>"
                     "APOS O VENC. COBRAR MULTA DE 2,00% | JUROS DE 0,17% DIA<br/>"
+                    f"{linha_historico}"
                     f"Parcela {parcela} de 1 &nbsp;|&nbsp; Pix Copia e Cole: <font size=5>{pix}</font>",
                     style_lbl
                 ),
@@ -274,7 +296,8 @@ def gerar_pdf_boleto(dados_pedido, pasta_destino, caminhos_config=None):
             [
                 Paragraph(
                     "Instruções (Texto de responsabilidade do beneficiário.)<br/>"
-                    "TESTE — APOS O VENC. COBRAR MULTA DE 2,00% | JUROS DE 0,17% DIA<br/>"
+                    "APOS O VENC. COBRAR MULTA DE 2,00% | JUROS DE 0,17% DIA<br/>"
+                    f"{linha_historico}"
                     f"Parcela {parcela} de 1 &nbsp;|&nbsp; Pix Copia e Cole: <font size=5>{pix}</font>",
                     style_lbl
                 ),

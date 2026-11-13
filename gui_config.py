@@ -29,10 +29,12 @@ def carregar_config():
         "smtp_user": "financeiro@rondochassis.com.br",
         "smtp_pass": "sua_senha_aqui",
         "logo_banco": "",
-        "numeros_ignorados": "5566999847335, 556634210400, 5566999840793, 5566999101124"
+        "numeros_ignorados": "5566999847335, 556634210400, 5566999840793, 5566999101124",
+        "whatsapp_vendas": "",
+        "whatsapp_oficina": ""
     }
 
-def salvar_config(dsn, smtp_host, smtp_port, imap_host, imap_port, user, senha, logo_path, numeros_ignorados):
+def salvar_config(dsn, smtp_host, smtp_port, imap_host, imap_port, user, senha, logo_path, numeros_ignorados, whatsapp_vendas, whatsapp_oficina):
     dados = {
         "db_dsn": dsn,
         "smtp_host": smtp_host,
@@ -42,7 +44,9 @@ def salvar_config(dsn, smtp_host, smtp_port, imap_host, imap_port, user, senha, 
         "smtp_user": user,
         "smtp_pass": senha,
         "logo_banco": logo_path,
-        "numeros_ignorados": numeros_ignorados
+        "numeros_ignorados": numeros_ignorados,
+        "whatsapp_vendas": whatsapp_vendas.strip(),
+        "whatsapp_oficina": whatsapp_oficina.strip()
     }
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(dados, f, indent=4, ensure_ascii=False)
@@ -105,18 +109,18 @@ def mostrar_notas_lancamento(parent):
         "📌 NOVIDADES E CORREÇÕES (v1.0.1):\n\n"
         "• Reestruturação do Menu Principal (WhatsApp):\n"
         "  - Menu principal simplificado de 4 opções direcionadas.\n"
-        "  - Eliminação da confusão anterior entre Contas a Pagar/Receber.\n"
-        "  - Redirecionamento direto para Atendentes (Financeiro, Vendas, Oficina).\n"
+        "  - Atendimento humano direto no chat para o Setor Financeiro.\n"
+        "  - Redirecionamento via link direto (wa.me) para Vendas e Oficina.\n"
         "  - Agrupamento do fluxo de Login/Senhas/Boletos no submenu de Gestão Financeira.\n\n"
-        "• Correções de Comunicação & Webhook:\n"
-        "  - Tratamento do esquema de URL HTTP (http://) no carregamento de variáveis .env.\n"
-        "  - Estabilização da rota do webhook para conexões via IP / Docker (host.docker.internal).\n"
-        "  - Tratamento aprimorado de eventos do WhatsApp para evitar respostas sem texto (no_text).\n\n"
+        "• Painel Administrativo & Sessão:\n"
+        "  - Cadastro dinâmico dos números de WhatsApp de Vendas e Oficina.\n"
+        "  - Expiração automática de sessão inativa após 30 minutos.\n"
+        "  - Leitura segura do arquivo .env em ambiente compilado (--onefile).\n\n"
         "--------------------------------------------------\n"
         "📌 RECURSOS DA VERSÃO 1.0.0:\n\n"
         "• Unificação Financeira de 90 Dias (ERP Firebird / TGA.FDB).\n"
         "• Automação de Boleto & Pix via WhatsApp (Sicoob / Evolution API).\n"
-        "• Painel Administrativo em Tkinter para reset manual de senhas e configurações de servidor."
+        "• Painel Administrativo em Tkinter para reset manual de senhas e configurações."
     )
 
     text_info.insert("1.0", changelog)
@@ -129,8 +133,8 @@ def abrir_tela_config():
 
     root = tk.Tk()
     root.title("Whatsapp Robo Financeiro - v1.0.1")
-    root.geometry("500x720")
-    root.minsize(500, 700)
+    root.geometry("520x785")
+    root.minsize(520, 765)
 
     # Topo com título e botão de release
     header_frame = tk.Frame(root)
@@ -142,7 +146,7 @@ def abrir_tela_config():
     btn_release.pack(side="right")
 
     # Frame Configurações de Conexão e SMTP/IMAP
-    frame_cfg = tk.LabelFrame(root, text=" Configurações de Servidor e E-mail ", padx=10, pady=10)
+    frame_cfg = tk.LabelFrame(root, text=" Configurações de Servidor e E-mail ", padx=10, pady=8)
     frame_cfg.pack(fill="x", padx=15, pady=5)
 
     tk.Label(frame_cfg, text="DSN Firebird:").pack(anchor="w")
@@ -182,21 +186,42 @@ def abrir_tela_config():
     entry_pass.pack(fill="x", pady=2)
     entry_pass.insert(0, config.get("smtp_pass", ""))
 
+    # Frame Redirecionamento de Setores (Vendas e Oficina)
+    frame_setores = tk.LabelFrame(root, text=" Redirecionamento de Setores (Ex: 5566999999999) ", padx=10, pady=8)
+    frame_setores.pack(fill="x", padx=15, pady=6)
+
+    row_setores = tk.Frame(frame_setores)
+    row_setores.pack(fill="x")
+
+    col_vendas = tk.Frame(row_setores)
+    col_vendas.pack(side="left", fill="x", expand=True, padx=(0, 8))
+    tk.Label(col_vendas, text="WhatsApp Vendas:").pack(anchor="w")
+    entry_vendas = tk.Entry(col_vendas, font=("Arial", 9))
+    entry_vendas.pack(fill="x", pady=2)
+    entry_vendas.insert(0, config.get("whatsapp_vendas", ""))
+
+    col_oficina = tk.Frame(row_setores)
+    col_oficina.pack(side="left", fill="x", expand=True)
+    tk.Label(col_oficina, text="WhatsApp Oficina:").pack(anchor="w")
+    entry_oficina = tk.Entry(col_oficina, font=("Arial", 9))
+    entry_oficina.pack(fill="x", pady=2)
+    entry_oficina.insert(0, config.get("whatsapp_oficina", ""))
+
     # Frame Números Ignorados
-    frame_ign = tk.LabelFrame(root, text=" Números Ignorados pelo Bot (separados por vírgula) ", padx=10, pady=10)
-    frame_ign.pack(fill="x", padx=15, pady=8)
+    frame_ign = tk.LabelFrame(root, text=" Números Ignorados pelo Bot (separados por vírgula) ", padx=10, pady=8)
+    frame_ign.pack(fill="x", padx=15, pady=6)
 
     entry_ign = tk.Entry(frame_ign, width=55, font=("Arial", 9))
     entry_ign.pack(fill="x", pady=2)
     entry_ign.insert(0, config.get("numeros_ignorados", ""))
 
     # Frame Reset Manual de Senha
-    frame_reset = tk.LabelFrame(root, text=" Reset Manual de Senha (Caso o cliente solicite) ", padx=10, pady=10)
-    frame_reset.pack(fill="x", padx=15, pady=8)
+    frame_reset = tk.LabelFrame(root, text=" Reset Manual de Senha (Caso o cliente solicite) ", padx=10, pady=8)
+    frame_reset.pack(fill="x", padx=15, pady=6)
 
     tk.Label(frame_reset, text="Digite o CNPJ ou CPF do Cliente:").pack(anchor="w")
     row_reset = tk.Frame(frame_reset)
-    row_reset.pack(fill="x", pady=5)
+    row_reset.pack(fill="x", pady=4)
     
     entry_doc_reset = tk.Entry(row_reset, width=32, font=("Arial", 10))
     entry_doc_reset.pack(side="left", padx=(0, 10))
@@ -211,12 +236,12 @@ def abrir_tela_config():
     tk.Button(row_reset, text="Gerar e Enviar Nova Senha", bg="#007bff", fg="white", font=("Arial", 9, "bold"), command=botao_reset_click).pack(side="left")
 
     # Frame Logo do Banco (Boleto)
-    frame_logo = tk.LabelFrame(root, text=" Configuração da Logo do Banco (Boleto PDF) ", padx=10, pady=10)
-    frame_logo.pack(fill="x", padx=15, pady=8)
+    frame_logo = tk.LabelFrame(root, text=" Configuração da Logo do Banco (Boleto PDF) ", padx=10, pady=8)
+    frame_logo.pack(fill="x", padx=15, pady=6)
 
     tk.Label(frame_logo, text="Arquivo de Logo (Ex: 756.bmp):").pack(anchor="w")
     row_logo = tk.Frame(frame_logo)
-    row_logo.pack(fill="x", pady=5)
+    row_logo.pack(fill="x", pady=4)
 
     entry_logo_path = tk.Entry(row_logo, width=35, font=("Arial", 9))
     entry_logo_path.pack(side="left", padx=(0, 10))
@@ -243,7 +268,9 @@ def abrir_tela_config():
             entry_user.get(),
             entry_pass.get(),
             entry_logo_path.get(),
-            entry_ign.get()
+            entry_ign.get(),
+            entry_vendas.get(),
+            entry_oficina.get()
         )
 
     tk.Button(root, text="Salvar Configurações", bg="#28a745", fg="white", font=("Arial", 10, "bold"), command=botao_salvar_click).pack(pady=10)
