@@ -70,6 +70,12 @@ except ImportError:
     boleto = None
     logging.warning("Módulo 'boleto' não encontrado na pasta física.")
 
+try:
+    import notas
+except ImportError:
+    notas = None
+    logging.warning("Módulo 'notas' não encontrado na pasta física.")
+
 # --- CARREGAR VARIÁVEIS DE AMBIENTE (.env) ---
 caminho_env = DIRETORIO_BASE / ".env"
 load_dotenv(dotenv_path=caminho_env, override=True)
@@ -185,34 +191,44 @@ def enviar_mensagem_whatsapp(numero: str, texto: str):
         return None
 
 
-def enviar_pdf_whatsapp(numero: str, caminho_pdf: str, filename: str = "documento.pdf", caption: str = ""):
-    """Envia documento PDF codificado em Base64 via Evolution API."""
+def enviar_documento_whatsapp(numero: str, caminho_arquivo: str, filename: str = None, caption: str = ""):
+    """Envia documento (PDF ou XML) codificado em Base64 via Evolution API."""
     url = f"{EVOLUTION_URL}/message/sendMedia/{INSTANCE_NAME}"
     headers = {
         "apikey": API_KEY,
         "Content-Type": "application/json"
     }
     try:
-        if not os.path.exists(caminho_pdf):
-            logging.error(f"Arquivo PDF não encontrado: {caminho_pdf}")
+        if not os.path.exists(caminho_arquivo):
+            logging.error(f"Arquivo não encontrado para envio: {caminho_arquivo}")
             return None
 
-        with open(caminho_pdf, "rb") as f:
-            pdf_base64 = base64.b64encode(f.read()).decode("utf-8")
+        nome_final = filename or os.path.basename(caminho_arquivo)
+        ext = os.path.splitext(nome_final)[1].lower()
+        mimetype = "application/xml" if ext == ".xml" else "application/pdf"
+
+        with open(caminho_arquivo, "rb") as f:
+            arquivo_base64 = base64.b64encode(f.read()).decode("utf-8")
 
         payload = {
             "number": numero,
-            "media": pdf_base64,
+            "media": arquivo_base64,
             "mediatype": "document",
-            "fileName": filename,
+            "mimetype": mimetype,
+            "fileName": nome_final,
             "caption": caption
         }
         response = requests.post(url, json=payload, headers=headers, timeout=30)
-        logging.info(f"Envio de PDF para {numero} | Status: {response.status_code}")
+        logging.info(f"Envio de documento ({nome_final}) para {numero} | Status: {response.status_code}")
         return response.json()
     except Exception as e:
-        logging.error(f"ERRO ao enviar PDF para a Evolution API: {e}")
+        logging.error(f"ERRO ao enviar documento para a Evolution API: {e}")
         return None
+
+
+def enviar_pdf_whatsapp(numero: str, caminho_pdf: str, filename: str = "documento.pdf", caption: str = ""):
+    """Wrapper para envio de documentos PDF."""
+    return enviar_documento_whatsapp(numero, caminho_pdf, filename=filename, caption=caption)
 
 
 def montar_texto_menu_principal() -> str:
@@ -481,7 +497,19 @@ async def webhook(payload: Request):
                 return {"status": "success"}
 
             cliente = service_bd.buscar_cliente_por_documento(doc_limpo)
-            if cliente.get("status") != "encontrado":
+            status_cli = cliente.get("status")
+
+            if status_cli == "inativo":
+                enviar_mensagem_whatsapp(
+                    numero,
+                    "⚠️ O seu cadastro consta como *INATIVO* em nosso sistema.\n\n"
+                    "Por favor, consulte o setor financeiro (Opção *1* no menu inicial) para regularizar."
+                )
+                user_states[numero] = {"etapa": "GESTAO_FINANCEIRA_MENU", "ultima_interacao": agora}
+                enviar_mensagem_whatsapp(numero, montar_texto_submenu_financeiro())
+                return {"status": "success"}
+
+            if status_cli != "encontrado":
                 enviar_mensagem_whatsapp(
                     numero,
                     "❌ Não existe esse CPF/CNPJ cadastrado em nosso sistema.\n\n"
@@ -574,7 +602,7 @@ async def webhook(payload: Request):
             return {"status": "success"}
 
         # =========================================================================
-        # FLUXO 4: INTERAÇÃO APÓS LOGIN (SOLICITAR BOLETOS E NOTAS DO PEDIDO)
+        # FLUXO 4: INTERAÇÃO APÓS LOGIN (ENVIO DE NOTAS XML/PDF + BOLETOS PDF)
         # =========================================================================
         elif etapa == "LOGADO_MENU_CLIENTE":
             user_states[numero]["ultima_interacao"] = agora
@@ -584,12 +612,31 @@ async def webhook(payload: Request):
             if opcao_escolhida in pedidos_map:
                 pedido_selecionado = pedidos_map[opcao_escolhida]
                 ped_num = pedido_selecionado.get("PEDIDO") or pedido_selecionado.get("NUMERO_PEDIDO") or opcao_escolhida
+                cfg_sistema = obter_config_sistema()
 
                 enviar_mensagem_whatsapp(numero, f"⏳ Buscando boletos e notas do *Pedido {ped_num}*, aguarde um instante...")
 
                 arquivos_enviados = 0
+                arquivos_nao_localizados = []
 
-                # 1. Envio dos Boletos PDF do pedido
+                # 1. Busca e envia NF-e (XML + PDF) e NFS-e (PDF) via módulo notas.py
+                if notas and hasattr(notas, "buscar_arquivos_notas"):
+                    resultado_notas = notas.buscar_arquivos_notas(pedido_selecionado, cfg_sistema)
+                    for item_nota in resultado_notas.get("encontrados", []):
+                        caminho_arq = item_nota["caminho"]
+                        nome_arq = item_nota["filename"]
+                        tipo_arq = item_nota["tipo"]
+                        resp_nota = enviar_documento_whatsapp(
+                            numero=numero,
+                            caminho_arquivo=caminho_arq,
+                            filename=nome_arq,
+                            caption=f"📄 {tipo_arq} - Pedido {ped_num}"
+                        )
+                        if resp_nota:
+                            arquivos_enviados += 1
+                    arquivos_nao_localizados.extend(resultado_notas.get("nao_encontrados", []))
+
+                # 2. Gera e envia os Boletos PDF do pedido
                 if pedido_selecionado.get("BOLETOS"):
                     pasta_boletos = pathlib.Path.home() / "Documents" / "RondochassisBot" / "boletos"
                     pasta_boletos.mkdir(parents=True, exist_ok=True)
@@ -599,7 +646,7 @@ async def webhook(payload: Request):
                         caminhos_boletos = boleto.gerar_pdf_boleto(
                             pedido_selecionado,
                             str(pasta_boletos),
-                            obter_config_sistema()
+                            cfg_sistema
                         )
 
                     if caminhos_boletos:
@@ -622,12 +669,20 @@ async def webhook(payload: Request):
                                     f"⚠️ Linha digitável (Parcela {bol.get('PARCELA', 1)}):\n\n`{linha_dig}`"
                                 )
 
-                # 2. Encaixe reservado para envio de NF-e / NFS-e (a implementar na próxima etapa)
-
-                if arquivos_enviados == 0:
+                # 3. Aviso específico caso alguma nota exista no banco mas o arquivo não esteja na pasta
+                if arquivos_nao_localizados:
+                    lista_faltantes = "\n".join(f"• *{item}*" for item in arquivos_nao_localizados)
                     enviar_mensagem_whatsapp(
                         numero,
-                        f"⚠️ Nenhum arquivo foi localizado para o *Pedido {ped_num}*."
+                        f"⚠️ Não foi possível enviar automaticamente o(s) seguinte(s) arquivo(s) do *Pedido {ped_num}*:\n\n"
+                        f"{lista_faltantes}\n\n"
+                        "Por favor, procure o setor financeiro (Opção *1* no menu inicial) para solicitá-lo(s)."
+                    )
+                elif arquivos_enviados == 0:
+                    enviar_mensagem_whatsapp(
+                        numero,
+                        f"⚠️ Nenhum arquivo foi localizado para o *Pedido {ped_num}*. "
+                        "Caso precise de segunda via, procure o setor financeiro."
                     )
 
                 enviar_mensagem_whatsapp(
@@ -668,8 +723,19 @@ async def webhook(payload: Request):
                 return {"status": "success"}
 
             cliente = service_bd.buscar_cliente_por_documento(doc_limpo)
+            status_cli = cliente.get("status")
 
-            if cliente.get("status") != "encontrado":
+            if status_cli == "inativo":
+                enviar_mensagem_whatsapp(
+                    numero,
+                    "⚠️ O seu cadastro consta como *INATIVO* em nosso sistema.\n\n"
+                    "Por favor, consulte o setor financeiro (Opção *1* no menu inicial) para regularizar."
+                )
+                user_states[numero] = {"etapa": "GESTAO_FINANCEIRA_MENU", "ultima_interacao": agora}
+                enviar_mensagem_whatsapp(numero, montar_texto_submenu_financeiro())
+                return {"status": "success"}
+
+            if status_cli != "encontrado":
                 enviar_mensagem_whatsapp(
                     numero,
                     "❌ Não existe esse CPF/CNPJ cadastrado em nosso sistema.\n\n"
@@ -744,7 +810,19 @@ async def webhook(payload: Request):
                 return {"status": "success"}
 
             cliente = service_bd.buscar_cliente_por_documento(doc_limpo)
-            if cliente.get("status") != "encontrado":
+            status_cli = cliente.get("status")
+
+            if status_cli == "inativo":
+                enviar_mensagem_whatsapp(
+                    numero,
+                    "⚠️ O seu cadastro consta como *INATIVO* em nosso sistema.\n\n"
+                    "Por favor, consulte o setor financeiro (Opção *1* no menu inicial) para regularizar."
+                )
+                user_states[numero] = {"etapa": "GESTAO_FINANCEIRA_MENU", "ultima_interacao": agora}
+                enviar_mensagem_whatsapp(numero, montar_texto_submenu_financeiro())
+                return {"status": "success"}
+
+            if status_cli != "encontrado":
                 enviar_mensagem_whatsapp(
                     numero,
                     "❌ Não existe esse CPF/CNPJ cadastrado em nosso sistema.\n\n"
