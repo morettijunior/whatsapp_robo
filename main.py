@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 TEMPO_EXPIRACAO_SEGUNDOS = 30 * 60  # 30 minutos
 
 # --- MODO TESTE (Comente a linha abaixo com # para liberar o bot para todos) ---
-NUMEROS_PERMITIDOS_TESTE = ["556634211496"]
+#NUMEROS_PERMITIDOS_TESTE = ["556634211496"]
 
 # --- DIRETÓRIO BASE REAL (FUNCIONA TANTO EM .PY QUANTO EM .EXE --ONEFILE) ---
 if getattr(sys, "frozen", False):
@@ -97,6 +97,9 @@ app = FastAPI()
 # Dicionário de sessão e estados em memória por número de WhatsApp
 user_states = {}
 
+# Registro dos IDs de mensagens enviadas pelo próprio bot para diferenciá-las das enviadas pelo atendente
+mensagens_enviadas_bot = {}
+
 
 class WebhookPayload(BaseModel):
     event: str = None
@@ -171,6 +174,24 @@ def obter_numero_setor(chave: str) -> str:
     return numero_limpo
 
 
+def _registrar_id_mensagem_bot(resposta_json: dict):
+    """Armazena temporariamente o ID da mensagem enviada pela API do bot."""
+    if not isinstance(resposta_json, dict):
+        return
+    msg_id = (
+        resposta_json.get("key", {}).get("id")
+        or resposta_json.get("data", {}).get("key", {}).get("id")
+        or resposta_json.get("id")
+    )
+    if msg_id:
+        agora = time.time()
+        mensagens_enviadas_bot[msg_id] = agora
+        # Limpa registros com mais de 5 minutos para não acumular memória
+        expirados = [k for k, ts in mensagens_enviadas_bot.items() if agora - ts > 300]
+        for k in expirados:
+            mensagens_enviadas_bot.pop(k, None)
+
+
 def enviar_mensagem_whatsapp(numero: str, texto: str):
     """Envia mensagem de texto via Evolution API."""
     url = f"{EVOLUTION_URL}/message/sendText/{INSTANCE_NAME}"
@@ -185,7 +206,9 @@ def enviar_mensagem_whatsapp(numero: str, texto: str):
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=12)
         logging.info(f"Envio de mensagem para {numero} | Status: {response.status_code}")
-        return response.json()
+        dados_resp = response.json()
+        _registrar_id_mensagem_bot(dados_resp)
+        return dados_resp
     except Exception as e:
         logging.error(f"ERRO ao enviar mensagem para a Evolution API: {e}")
         return None
@@ -220,7 +243,9 @@ def enviar_documento_whatsapp(numero: str, caminho_arquivo: str, filename: str =
         }
         response = requests.post(url, json=payload, headers=headers, timeout=30)
         logging.info(f"Envio de documento ({nome_final}) para {numero} | Status: {response.status_code}")
-        return response.json()
+        dados_resp = response.json()
+        _registrar_id_mensagem_bot(dados_resp)
+        return dados_resp
     except Exception as e:
         logging.error(f"ERRO ao enviar documento para a Evolution API: {e}")
         return None
@@ -310,15 +335,29 @@ async def webhook(payload: Request):
 
         data = body.get("data", {})
         key = data.get("key", {})
-        
-        if key.get("fromMe", False):
-            return {"status": "ignored_from_me"}
 
         remote_jid = key.get("remoteJid", "")
-        if "@g.us" in remote_jid:
+        if "@g.us" in remote_jid or "status@broadcast" in remote_jid:
             return {"status": "ignored_group"}
 
         numero = limpar_numero(remote_jid)
+
+        # Se a mensagem partiu do próprio número da empresa (fromMe = True)
+        if key.get("fromMe", False):
+            msg_id = key.get("id", "")
+            # Se o ID foi gerado pela própria API do bot, ignora apenas o eco
+            if msg_id and msg_id in mensagens_enviadas_bot:
+                return {"status": "ignored_bot_echo"}
+
+            # Caso contrário, foi enviada manualmente pelo atendente (celular ou WhatsApp Web):
+            # pausa o bot para este cliente e inicia/renova o cronômetro de 30 minutos
+            agora_atendente = time.time()
+            user_states[numero] = {
+                "etapa": "ATENDENTE_FINANCEIRO",
+                "ultima_interacao": agora_atendente,
+            }
+            logging.info(f"Atendente iniciou/respondeu conversa com {numero}. Bot pausado por 30 min.")
+            return {"status": "human_initiated_pause"}
 
         # Trava do Modo Teste (atua apenas enquanto NUMEROS_PERMITIDOS_TESTE não estiver comentado)
         if "NUMEROS_PERMITIDOS_TESTE" in globals() and NUMEROS_PERMITIDOS_TESTE:
