@@ -254,6 +254,17 @@ def montar_texto_submenu_financeiro() -> str:
     )
 
 
+def montar_texto_submenu_periodo() -> str:
+    return (
+        "📅 *Selecione o período para consulta:*\n\n"
+        "0️⃣1️⃣ - Últimos 30 dias\n"
+        "0️⃣2️⃣ - Últimos 60 dias\n"
+        "0️⃣3️⃣ - Últimos 90 dias\n"
+        "0️⃣ - Voltar\n\n"
+        "Digite a opção desejada:"
+    )
+
+
 def formatar_bloco_pedido_chat(indice: int, ped: dict) -> str:
     """Formata um pedido para exibição no chat no mesmo padrão do relatório PDF."""
     linhas = [f"{formatar_numero_emoji(indice)}"]
@@ -350,6 +361,7 @@ async def webhook(payload: Request):
         etapas_filhas_financeiro = {
             "AGUARDANDO_LOGIN_CNPJ",
             "AGUARDANDO_LOGIN_SENHA",
+            "AGUARDANDO_PERIODO_RELATORIO",
             "AGUARDANDO_SOLICITAR_SENHA",
             "AGUARDANDO_ALTERAR_CNPJ",
             "AGUARDANDO_SENHA_ATUAL",
@@ -477,7 +489,7 @@ async def webhook(payload: Request):
                 return {"status": "success"}
 
         # =========================================================================
-        # FLUXO 3: EXECUÇÃO DE LOGIN (CNPJ -> SENHA -> RELATÓRIO AGRUPADO POR PEDIDO)
+        # FLUXO 3: EXECUÇÃO DE LOGIN (CNPJ -> SENHA -> PERÍODO -> RELATÓRIO)
         # =========================================================================
         elif etapa == "AGUARDANDO_LOGIN_CNPJ":
             user_states[numero]["ultima_interacao"] = agora
@@ -546,58 +558,93 @@ async def webhook(payload: Request):
 
             if valido:
                 user_states[numero] = {
-                    "etapa": "LOGADO_MENU_CLIENTE",
+                    "etapa": "AGUARDANDO_PERIODO_RELATORIO",
                     "doc": doc_usuario,
                     "codcfo": codcfo,
                     "nome": nome_cliente,
                     "ultima_interacao": agora
                 }
-                enviar_mensagem_whatsapp(numero, "✅ *Login efetuado com sucesso!* Buscando seus pedidos dos últimos 90 dias no sistema ERP...")
-                
-                pedidos = service_bd.consultar_relatorio_pedidos_90_dias(codcfo)
-                
-                if pedidos:
-                    # Gera e envia o PDF consolidado dos últimos 90 dias
-                    if service_pdf:
-                        try:
-                            validacao_doc = service_bd.validar_e_formatar_documento(doc_usuario)
-                            doc_fmt = validacao_doc.get("documento", doc_usuario)
-                            caminho_relatorio = service_pdf.gerar_pdf_relatorio_90_dias(nome_cliente, doc_fmt, pedidos)
-                            if caminho_relatorio and os.path.exists(caminho_relatorio):
-                                enviar_pdf_whatsapp(
-                                    numero=numero,
-                                    caminho_pdf=caminho_relatorio,
-                                    filename="Extrato_Financeiro_90_Dias.pdf",
-                                    caption="📊 Segue o seu extrato consolidado dos últimos 90 dias."
-                                )
-                        except Exception as e_pdf:
-                            logging.error(f"Erro ao gerar/enviar relatório 90 dias: {e_pdf}")
-
-                    # Monta a mensagem no chat dividida por PEDIDO (espelhando o PDF)
-                    user_states[numero]["pedidos_map"] = {}
-                    blocos_pedidos = []
-
-                    for idx, ped in enumerate(pedidos, start=1):
-                        user_states[numero]["pedidos_map"][str(idx)] = ped
-                        blocos_pedidos.append(formatar_bloco_pedido_chat(idx, ped))
-
-                    msg_pedidos = (
-                        "📋 *Pedidos e Títulos (últimos 90 dias):*\n\n"
-                        + "\n\n──────────────\n\n".join(blocos_pedidos)
-                        + "\n\nDigite o *número do pedido* acima para receber os boletos e notas existentes.\n"
-                        "Digite *0* para voltar ao menu inicial."
-                    )
-                    enviar_mensagem_whatsapp(numero, msg_pedidos)
-                else:
-                    enviar_mensagem_whatsapp(
-                        numero, 
-                        "ℹ️ Nenhum pedido ou título foi encontrado para este documento nos últimos 90 dias.\n\n"
-                        "Digite *0* para retornar ao menu principal."
-                    )
+                enviar_mensagem_whatsapp(
+                    numero,
+                    "✅ *Login efetuado com sucesso!*\n\n" + montar_texto_submenu_periodo()
+                )
             else:
                 user_states[numero] = {"etapa": "GESTAO_FINANCEIRA_MENU", "ultima_interacao": agora}
                 enviar_mensagem_whatsapp(numero, "❌ Senha incorreta. Acesso negado.")
                 enviar_mensagem_whatsapp(numero, montar_texto_submenu_financeiro())
+            
+            return {"status": "success"}
+
+        elif etapa == "AGUARDANDO_PERIODO_RELATORIO":
+            user_states[numero]["ultima_interacao"] = agora
+            opcao_periodo = texto_mensagem.strip().lstrip("0")
+            mapa_periodos = {"1": 30, "2": 60, "3": 90}
+
+            if opcao_periodo not in mapa_periodos:
+                enviar_mensagem_whatsapp(
+                    numero,
+                    "❌ Opção inválida.\n\n" + montar_texto_submenu_periodo()
+                )
+                return {"status": "success"}
+
+            dias_escolhidos = mapa_periodos[opcao_periodo]
+            doc_usuario = estado_atual.get("doc", "")
+            codcfo = estado_atual.get("codcfo", "")
+            nome_cliente = estado_atual.get("nome", "")
+
+            user_states[numero] = {
+                "etapa": "LOGADO_MENU_CLIENTE",
+                "doc": doc_usuario,
+                "codcfo": codcfo,
+                "nome": nome_cliente,
+                "dias_periodo": dias_escolhidos,
+                "ultima_interacao": agora
+            }
+            enviar_mensagem_whatsapp(
+                numero,
+                f"⏳ Buscando seus pedidos dos últimos *{dias_escolhidos} dias* no sistema ERP..."
+            )
+            
+            pedidos = service_bd.consultar_relatorio_pedidos_90_dias(codcfo, dias=dias_escolhidos)
+            
+            if pedidos:
+                # Gera e envia o PDF consolidado do período selecionado
+                if service_pdf:
+                    try:
+                        validacao_doc = service_bd.validar_e_formatar_documento(doc_usuario)
+                        doc_fmt = validacao_doc.get("documento", doc_usuario)
+                        caminho_relatorio = service_pdf.gerar_pdf_relatorio_90_dias(nome_cliente, doc_fmt, pedidos)
+                        if caminho_relatorio and os.path.exists(caminho_relatorio):
+                            enviar_pdf_whatsapp(
+                                numero=numero,
+                                caminho_pdf=caminho_relatorio,
+                                filename=f"Extrato_Financeiro_{dias_escolhidos}_Dias.pdf",
+                                caption=f"📊 Segue o seu extrato consolidado dos últimos {dias_escolhidos} dias."
+                            )
+                    except Exception as e_pdf:
+                        logging.error(f"Erro ao gerar/enviar relatório {dias_escolhidos} dias: {e_pdf}")
+
+                # Monta a mensagem no chat dividida por PEDIDO (espelhando o PDF)
+                user_states[numero]["pedidos_map"] = {}
+                blocos_pedidos = []
+
+                for idx, ped in enumerate(pedidos, start=1):
+                    user_states[numero]["pedidos_map"][str(idx)] = ped
+                    blocos_pedidos.append(formatar_bloco_pedido_chat(idx, ped))
+
+                msg_pedidos = (
+                    f"📋 *Pedidos e Títulos (últimos {dias_escolhidos} dias):*\n\n"
+                    + "\n\n──────────────\n\n".join(blocos_pedidos)
+                    + "\n\nDigite o *número do pedido* acima para receber os boletos e notas existentes.\n"
+                    "Digite *P* para escolher outro período (30/60/90 dias) ou *0* para voltar ao menu inicial."
+                )
+                enviar_mensagem_whatsapp(numero, msg_pedidos)
+            else:
+                enviar_mensagem_whatsapp(
+                    numero, 
+                    f"ℹ️ Nenhum pedido ou título foi encontrado para este documento nos últimos *{dias_escolhidos} dias*.\n\n"
+                    "Digite *P* para consultar outro período (30/60/90 dias) ou *0* para retornar ao menu principal."
+                )
             
             return {"status": "success"}
 
@@ -608,6 +655,11 @@ async def webhook(payload: Request):
             user_states[numero]["ultima_interacao"] = agora
             pedidos_map = estado_atual.get("pedidos_map", {})
             opcao_escolhida = texto_mensagem.strip()
+
+            if opcao_escolhida.upper() == "P":
+                user_states[numero]["etapa"] = "AGUARDANDO_PERIODO_RELATORIO"
+                enviar_mensagem_whatsapp(numero, montar_texto_submenu_periodo())
+                return {"status": "success"}
 
             if opcao_escolhida in pedidos_map:
                 pedido_selecionado = pedidos_map[opcao_escolhida]
@@ -687,12 +739,12 @@ async def webhook(payload: Request):
 
                 enviar_mensagem_whatsapp(
                     numero,
-                    "Digite *outro número* da lista acima para baixar os arquivos ou *0* para voltar."
+                    "Digite *outro número* da lista acima para baixar os arquivos, *P* para mudar o período ou *0* para voltar."
                 )
             else:
                 enviar_mensagem_whatsapp(
                     numero,
-                    "❌ Opção inválida. Digite o *número do pedido* listado acima ou *0* para voltar."
+                    "❌ Opção inválida. Digite o *número do pedido* listado acima, *P* para mudar o período ou *0* para voltar."
                 )
 
             return {"status": "success"}

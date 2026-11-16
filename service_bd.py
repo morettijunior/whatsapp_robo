@@ -141,6 +141,7 @@ def buscar_cliente_por_documento(doc_digitado):
     finally:
         conn.close()
 
+
 def _obter_codcfos_relacionados_ativos(cursor, codcfo_limpo: str) -> list[str]:
     """Retorna todos os CODCFO ativos (TIPO 'C' ou 'A') com o mesmo CGCCFO do cliente informado."""
     cursor.execute("SELECT TRIM(CGCCFO) FROM FCFO WHERE TRIM(CODCFO) = ?", (codcfo_limpo,))
@@ -163,6 +164,7 @@ def _obter_codcfos_relacionados_ativos(cursor, codcfo_limpo: str) -> list[str]:
     )
     lista = [str(r[0]).strip() for r in cursor.fetchall() if r and r[0]]
     return lista if lista else [codcfo_limpo]
+
 
 def salvar_ou_atualizar_senha_robo(codcfo, nome, email, senha_plana):
     conn = _obter_conexao_bd()
@@ -254,8 +256,9 @@ def _formatar_data_bd(valor_dt) -> str:
 # -------------------------------------------------------------------------
 # 1. BLOCO DE PEDIDOS COMUNS
 # -------------------------------------------------------------------------
-def _consultar_pedidos_comuns(cursor, codcfo_limpo):
-    sql_comum = """
+def _consultar_pedidos_comuns(cursor, codcfo_limpo, dias: int = 90):
+    dias_int = int(dias) if int(dias) in (30, 60, 90) else 90
+    sql_comum = f"""
         SELECT 
             f.IDMOV,
             f.NUMERODOCUMENTO,
@@ -319,7 +322,7 @@ def _consultar_pedidos_comuns(cursor, codcfo_limpo):
         WHERE f.CODCFO = ?
           AND f.PAGREC = 'R'
           AND f.STATUSLAN IN ('A', 'B')
-          AND f.DATAEMISSAO >= CURRENT_DATE - 90
+          AND f.DATAEMISSAO >= CURRENT_DATE - {dias_int}
           AND f.CODTDO IN ('DP', 'BO', 'NF')
           AND f.IDMOV IS NOT NULL
         ORDER BY f.DATAEMISSAO ASC, f.PARCELA ASC
@@ -483,8 +486,9 @@ def _consultar_pedidos_comuns(cursor, codcfo_limpo):
 # -------------------------------------------------------------------------
 # 2. BLOCO DE PEDIDOS AGRUPADOS
 # -------------------------------------------------------------------------
-def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
-    sql_agrupado = """
+def _consultar_pedidos_agrupados(cursor, codcfo_limpo, dias: int = 90):
+    dias_int = int(dias) if int(dias) in (30, 60, 90) else 90
+    sql_agrupado = f"""
         SELECT 
             f.IDLAN,
             f.NUMERODOCUMENTO,
@@ -556,7 +560,7 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
         WHERE f.CODCFO = ?
           AND f.PAGREC = 'R'
           AND f.STATUSLAN IN ('A', 'B')
-          AND f.DATAEMISSAO >= CURRENT_DATE - 90
+          AND f.DATAEMISSAO >= CURRENT_DATE - {dias_int}
           AND f.CODTDO IN ('DP', 'BO', 'NF')
           AND f.IDMOV IS NULL
           AND (orig.IDMOV IS NOT NULL OR orig_via_ponte.IDMOV IS NOT NULL)
@@ -828,24 +832,113 @@ def _consultar_pedidos_agrupados(cursor, codcfo_limpo):
 
 
 # -------------------------------------------------------------------------
-# 3. ORQUESTRADOR PRINCIPAL
+# 3. ORQUESTRADOR PRINCIPAL E UNIFICAÇÃO POR PEDIDO / O.S.
 # -------------------------------------------------------------------------
-def consultar_relatorio_pedidos_90_dias(codcfo_cliente):
+def _unificar_movimentos_mesmo_pedido(itens: list) -> list:
+    """
+    Agrupa no mesmo bloco itens que pertencem ao mesmo PEDIDO (ou mesma O.S.),
+    reunindo todas as parcelas, boletos, chaves de NF-e e recibos de NFS-e.
+    """
+    consolidados = []
+    indice_por_chave = {}
+
+    for item in itens:
+        ped = str(item.get("PEDIDO") or item.get("NUMERO_PEDIDO") or "").strip()
+        os_num = str(item.get("OS") or "").strip()
+        data_ref = str(item.get("DATA") or "").strip()
+
+        chave = None
+        if ped and ped != "-":
+            chave = f"PED_{ped}"
+        elif os_num and os_num != "-":
+            chave = f"OS_{os_num}"
+
+        if not chave or chave not in indice_por_chave:
+            if chave:
+                indice_por_chave[chave] = len(consolidados)
+            consolidados.append(item)
+            continue
+
+        destino = consolidados[indice_por_chave[chave]]
+
+        if not destino.get("OS") and os_num:
+            destino["OS"] = os_num
+        if not destino.get("PEDIDO") and ped:
+            destino["PEDIDO"] = ped
+            destino["NUMERO_PEDIDO"] = ped
+        if destino.get("PLACA") in ("", "-") and item.get("PLACA") not in ("", "-"):
+            destino["PLACA"] = item["PLACA"]
+        if not destino.get("DATA") and data_ref:
+            destino["DATA"] = data_ref
+
+        # Mescla números das notas exibidas no cabeçalho
+        notas_existentes = [n for n in str(destino.get("NOTA") or "").split() if n and n != "-"]
+        for n in str(item.get("NOTA") or "").split():
+            if n and n != "-" and n not in notas_existentes:
+                notas_existentes.append(n)
+        destino["NOTA"] = "  ".join(notas_existentes) if notas_existentes else "-"
+
+        # Mescla metadados de NF-e e NFS-e para o download em lote funcionar completo
+        if not destino.get("CHAVE_NFE") and item.get("CHAVE_NFE"):
+            destino["CHAVE_NFE"] = item["CHAVE_NFE"]
+        for ch in item.get("CHAVES_NFE", []):
+            if not any(c.get("chave") == ch.get("chave") for c in destino.setdefault("CHAVES_NFE", [])):
+                destino["CHAVES_NFE"].append(ch)
+
+        if not destino.get("RECIBO_NFSE") and item.get("RECIBO_NFSE"):
+            destino["RECIBO_NFSE"] = item["RECIBO_NFSE"]
+        if not destino.get("NUMERO_NFS_MUNICIPAL") and item.get("NUMERO_NFS_MUNICIPAL"):
+            destino["NUMERO_NFS_MUNICIPAL"] = item["NUMERO_NFS_MUNICIPAL"]
+        if not destino.get("SERIE_NFSE") and item.get("SERIE_NFSE"):
+            destino["SERIE_NFSE"] = item["SERIE_NFSE"]
+        for rec in item.get("RECIBOS_NFSE", []):
+            if not any(
+                r.get("recibo") == rec.get("recibo")
+                and r.get("numero") == rec.get("numero")
+                and r.get("serie") == rec.get("serie")
+                for r in destino.setdefault("RECIBOS_NFSE", [])
+            ):
+                destino["RECIBOS_NFSE"].append(rec)
+
+        # Mescla parcelas e boletos (evitando duplicata idêntica e renumerando 1..4)
+        for parc in item.get("PARCELAS", []):
+            destino["PARCELAS"].append(parc)
+
+        for bol in item.get("BOLETOS", []):
+            destino["BOLETOS"].append(bol)
+
+        destino["PARCELAS"].sort(key=lambda p: (str(p.get("VENCIMENTO", "")), int(p.get("PARCELA", 1))))
+        destino["BOLETOS"].sort(key=lambda b: (str(b.get("VENCIMENTO", "")), int(b.get("PARCELA", 1))))
+
+        for idx_p, (parc, bol) in enumerate(zip(destino["PARCELAS"], destino["BOLETOS"]), start=1):
+            parc["PARCELA"] = idx_p
+            bol["PARCELA"] = idx_p
+
+        destino["VALOR_TOTAL"] = sum(float(p.get("VALOR") or 0.0) for p in destino["PARCELAS"])
+
+    return consolidados
+
+
+def consultar_relatorio_pedidos_90_dias(codcfo_cliente, dias: int = 90):
     conn = _obter_conexao_bd()
     if not conn:
         return []
 
     cursor = conn.cursor()
     codcfo_limpo = codcfo_cliente.strip()
+    dias_int = int(dias) if int(dias) in (30, 60, 90) else 90
     
     try:
-        lista_comuns = _consultar_pedidos_comuns(cursor, codcfo_limpo)
-        lista_agrupados = _consultar_pedidos_agrupados(cursor, codcfo_limpo)
-        resultado_final = lista_comuns + lista_agrupados
-        return resultado_final
+        codcfos = _obter_codcfos_relacionados_ativos(cursor, codcfo_limpo)
+        resultado_bruto = []
+        for codigo in codcfos:
+            lista_comuns = _consultar_pedidos_comuns(cursor, codigo, dias_int)
+            lista_agrupados = _consultar_pedidos_agrupados(cursor, codigo, dias_int)
+            resultado_bruto.extend(lista_comuns + lista_agrupados)
+        return _unificar_movimentos_mesmo_pedido(resultado_bruto)
 
     except Exception as e:
-        logging.error(f"Erro na consulta unificada de 90 dias: {e}")
+        logging.error(f"Erro na consulta unificada de {dias_int} dias: {e}")
         return []
     finally:
         conn.close()
