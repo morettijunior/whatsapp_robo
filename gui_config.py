@@ -85,11 +85,6 @@ def resetar_senha_cliente_por_cnpj(doc_digitado):
     if cliente.get("status") != "encontrado":
         messagebox.showerror("Erro", "CNPJ/CPF não encontrado na base de dados do ERP ou formato inválido!")
         return
-    
-    cliente = buscar_cliente_por_documento(doc_digitado)
-    if cliente.get("status") != "encontrado":
-        messagebox.showerror("Erro", "CNPJ/CPF não encontrado na base de dados do ERP ou formato inválido!")
-        return
         
     email = cliente.get("email")
     if not email:
@@ -113,14 +108,14 @@ def resetar_senha_cliente_por_cnpj(doc_digitado):
 
 
 def mostrar_notas_lancamento(parent):
-    """Exibe a janela pop-up com o release notes da versão 1.0.2"""
+    """Exibe a janela pop-up com o release notes da versão 1.0.3"""
     top = tk.Toplevel(parent)
-    top.title("Release Notes - Versão 1.0.2")
-    top.geometry("500x460")
-    top.minsize(440, 410)
+    top.title("Release Notes - Versão 1.0.3")
+    top.geometry("500x480")
+    top.minsize(440, 420)
     
-    tk.Label(top, text="🚀 Bot Rondochassis - Versão 1.0.2", font=("Arial", 11, "bold")).pack(pady=(12, 5))
-    tk.Label(top, text="Data de Atualização: Novembro de 2026", font=("Arial", 9, "italic"), fg="#555").pack(pady=(0, 10))
+    tk.Label(top, text="🚀 Bot Rondochassis - Versão 1.0.3", font=("Arial", 11, "bold")).pack(pady=(12, 5))
+    tk.Label(top, text="Data de Atualização: 17/11/2026", font=("Arial", 9, "italic"), fg="#555").pack(pady=(0, 10))
 
     frame_txt = tk.Frame(top)
     frame_txt.pack(fill="both", expand=True, padx=15, pady=5)
@@ -133,7 +128,15 @@ def mostrar_notas_lancamento(parent):
     scrollbar.config(command=text_info.yview)
 
     changelog = (
-        "📌 NOVIDADES E CORREÇÕES (v1.0.2):\n\n"
+        "📌 NOVIDADES E MELHORIAS (v1.0.3):\n\n"
+        "• Estabilidade e Operação Contínua 24/7:\n"
+        "  - Webhook não-bloqueante para atendimento simultâneo sem filas.\n"
+        "  - Resolução automática de identificadores privados (@lid / remoteJidAlt).\n"
+        "  - Filtro anti-represamento: ignora mensagens antigas (>180s) após reconexão.\n"
+        "  - Pausa automática de 30 minutos quando o atendente responde pelo celular.\n"
+        "  - Submenu de período (30, 60 e 90 dias) e atalho 'P' após o login.\n\n"
+        "--------------------------------------------------\n"
+        "📌 RECURSOS DA VERSÃO 1.0.2:\n\n"
         "• Envio Automático de NF-e (XML/PDF) e NFS-e (PDF):\n"
         "  - Busca automática de NF-e por Ano/Mês e Chave de Acesso (TNFE).\n"
         "  - Busca automática de NFS-e Nacional pelo Recibo (TNFEMUNICIPAL).\n"
@@ -157,7 +160,7 @@ def abrir_tela_config():
     config = carregar_config()
 
     root = tk.Tk()
-    root.title("Whatsapp Robo Financeiro - v1.0.2")
+    root.title("Whatsapp Robo Financeiro - v1.0.3")
     root.geometry("560x735")
     root.minsize(540, 715)
 
@@ -168,7 +171,7 @@ def abrir_tela_config():
     tk.Label(header_frame, text="Painel Administrativo - Bot Rondochassis", font=("Arial", 12, "bold")).pack(side="left")
     
     btn_release = tk.Button(
-        header_frame, text="Versão 1.0.2 ℹ️", bg="#17a2b8", fg="white",
+        header_frame, text="Versão 1.0.3 ℹ️", bg="#17a2b8", fg="white",
         font=("Arial", 8, "bold"), command=lambda: mostrar_notas_lancamento(root)
     )
     btn_release.pack(side="right")

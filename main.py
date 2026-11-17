@@ -324,9 +324,8 @@ def formatar_bloco_pedido_chat(indice: int, ped: dict) -> str:
 
 
 @app.post("/webhook")
-async def webhook(payload: Request):
+def webhook(body: dict):
     try:
-        body = await payload.json()
         logging.info(f"Payload recebido: {body}")
         
         event = body.get("event", "")
@@ -337,10 +336,30 @@ async def webhook(payload: Request):
         key = data.get("key", {})
 
         remote_jid = key.get("remoteJid", "")
-        if "@g.us" in remote_jid or "status@broadcast" in remote_jid:
+        remote_jid_alt = key.get("remoteJidAlt", "")
+
+        # Quando o WhatsApp envia ID privado (@lid), usa remoteJidAlt se disponível
+        jid_efetivo = remote_jid_alt if ("@lid" in remote_jid and "@s.whatsapp.net" in remote_jid_alt) else remote_jid
+
+        if "@g.us" in jid_efetivo or "status@broadcast" in jid_efetivo:
             return {"status": "ignored_group"}
 
-        numero = limpar_numero(remote_jid)
+        if "@lid" in jid_efetivo:
+            logging.warning(f"Mensagem recebida apenas com @lid sem número real ({jid_efetivo}). Ignorando envio.")
+            return {"status": "ignored_lid_without_phone"}
+
+        numero = limpar_numero(jid_efetivo)
+
+        # Ignora mensagens antigas represadas pela fila da Evolution API (mais de 3 minutos de atraso)
+        msg_ts = data.get("messageTimestamp")
+        if msg_ts and not key.get("fromMe", False):
+            try:
+                atraso_segundos = time.time() - int(msg_ts)
+                if atraso_segundos > 180:
+                    logging.warning(f"Mensagem antiga ignorada ({int(atraso_segundos)}s de atraso) de {numero}.")
+                    return {"status": "ignored_stale_message"}
+            except Exception:
+                pass
 
         # Se a mensagem partiu do próprio número da empresa (fromMe = True)
         if key.get("fromMe", False):
