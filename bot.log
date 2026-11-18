@@ -1,0 +1,10 @@
+2026-11-18 14:36:31,242 - INFO - Inicializando Bot | .env encontrado: True | URL: http://localhost:8080 | Instância: rondochassis_dev | API_KEY carregada: SIM | Modo Teste: DESATIVADO
+2026-11-18 14:36:31,367 - INFO - Servidor FastAPI ativo e aguardando webhooks na porta 5000...
+2026-11-18 14:36:31,508 - INFO - Started server process [16300]
+2026-11-18 14:36:31,508 - INFO - Waiting for application startup.
+2026-11-18 14:36:31,512 - INFO - Application startup complete.
+2026-11-18 14:36:31,513 - INFO - Uvicorn running on http://0.0.0.0:5000 (Press CTRL+C to quit)
+2026-11-18 14:36:32,592 - INFO - Shutting down
+2026-11-18 14:36:32,697 - INFO - Waiting for application shutdown.
+2026-11-18 14:36:32,698 - INFO - Application shutdown complete.
+2026-11-18 14:36:32,698 - INFO - Finished server process [16300]

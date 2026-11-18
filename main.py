@@ -389,15 +389,40 @@ def webhook(body: dict):
         if apenas_numeros(numero) in obter_numeros_ignorados():
             logging.info(f"Número ignorado conforme configuração da GUI: {numero}")
             return {"status": "ignored_number"}
-        
+
         message_obj = data.get("message", {})
         texto_mensagem = (
             message_obj.get("conversation") or
             message_obj.get("extendedTextMessage", {}).get("text") or
+            message_obj.get("imageMessage", {}).get("caption") or
+            message_obj.get("documentMessage", {}).get("caption") or
             ""
         ).strip()
 
         if not texto_mensagem:
+            tipos_midia = ("audioMessage", "imageMessage", "videoMessage", "documentMessage", "stickerMessage")
+            if any(t in message_obj for t in tipos_midia):
+                agora_midia = time.time()
+                sessao_midia = user_states.get(numero)
+                if sessao_midia and (agora_midia - sessao_midia.get("ultima_interacao", 0) > TEMPO_EXPIRACAO_SEGUNDOS):
+                    user_states.pop(numero, None)
+                    sessao_midia = None
+
+                # Atualiza a interação para manter a sessão viva ou inicia no MENU_PRINCIPAL
+                if not sessao_midia:
+                    user_states[numero] = {"etapa": "MENU_PRINCIPAL", "ultima_interacao": agora_midia}
+                else:
+                    sessao_midia["ultima_interacao"] = agora_midia
+
+                aviso_midia = (
+                    "Olá! Sou o assistente virtual da *Rondochassis* 🤖 e não consigo ouvir áudios ou visualizar imagens/arquivos por aqui.\n\n"
+                    "Por favor, responda apenas digitando o *número* de uma das opções abaixo:\n\n"
+                    + montar_texto_menu_principal()
+                )
+                enviar_mensagem_whatsapp(numero, aviso_midia)
+                logging.info(f"Mídia/Áudio recebido de {numero}. Aviso + Menu enviados.")
+                return {"status": "media_replied_with_menu"}
+
             return {"status": "no_text"}
 
         logging.info(f"Número: {numero} | Mensagem: {texto_mensagem}")
